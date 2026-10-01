@@ -271,13 +271,11 @@ button:hover { opacity: 0.85; }
   inset: 0;
   z-index: 9; /* below #hud (10) so its story/history toggle stays clickable */
   overflow-y: auto;
-  scroll-snap-type: y proximity;
   background: transparent;
 }
 #story-scroll.hidden { display: none; pointer-events: none; }
 .story-section {
   height: 100vh;
-  scroll-snap-align: start;
   display: flex;
   align-items: center;
   justify-content: center;

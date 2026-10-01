@@ -199,25 +199,11 @@ renderer.setClearColor(0x05070b, 1);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 6000);
-// A second camera, never rendered, kept at the same orbit (theta/phi/radius)
-// as `camera` but always looking at the true origin instead of `cam.target`.
-// Hover hit-testing (see findStarAt's `stable` option) projects against this
-// one instead of the live camera, specifically to break a feedback loop:
-// gravity-of-attention (below) eases the live camera's target toward
-// whoever's hovered, which shifts that star's own screen position, which
-// could flip the hover hit-test, which changes the target again... a visible
-// jitter loop the instant someone's cursor tried to track the drift. Hit
-// -testing against a camera that never moves for that reason has no such
-// loop. Clicks still use the live camera, so click precision matches what's
-// actually on screen.
-const hitCamera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 6000);
 
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  hitCamera.aspect = window.innerWidth / window.innerHeight;
-  hitCamera.updateProjectionMatrix();
 }
 window.addEventListener("resize", resize);
 resize();
@@ -242,13 +228,6 @@ function applyCamera() {
     t.target.z + t.radius * sinPhi * Math.sin(t.theta),
   );
   camera.lookAt(t.target);
-  hitCamera.position.set(
-    t.radius * sinPhi * Math.cos(t.theta),
-    t.radius * Math.cos(t.phi),
-    t.radius * sinPhi * Math.sin(t.theta),
-  );
-  hitCamera.lookAt(0, 0, 0);
-  hitCamera.updateMatrixWorld();
 }
 
 function projectToScreen(v3, viewCamera = camera) {
@@ -261,20 +240,22 @@ function projectToScreen(v3, viewCamera = camera) {
 }
 
 // --- reusable glow textures ------------------------------------------------
-function makeRadialTexture(inner, outer) {
+function makeRadialTexture(inner, outer, mid) {
   const size = 128;
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d");
   const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
   grad.addColorStop(0, inner);
+  if (mid) grad.addColorStop(0.6, mid);
   grad.addColorStop(1, outer);
   g.fillStyle = grad;
   g.fillRect(0, 0, size, size);
   return new THREE.CanvasTexture(c);
 }
 const haloTexture = makeRadialTexture("rgba(255,255,255,1)", "rgba(255,255,255,0)");
-const coreTexture = makeRadialTexture("rgba(255,255,255,1)", "rgba(255,255,255,0.05)");
+// must reach alpha 0 at the edge, or the sprite's square outline shows up close
+const coreTexture = makeRadialTexture("rgba(255,255,255,1)", "rgba(255,255,255,0)", "rgba(255,255,255,0.12)");
 const ringTexture = (() => {
   const size = 128;
   const c = document.createElement("canvas");
@@ -360,7 +341,7 @@ const SKY_SEED = 1337;
 })();
 
 // --- star visuals ---------------------------------------------------------
-const starNodes = new Map(); // id -> {group, core, halo, ring, label, labelText, enteredAt}
+const starNodes = new Map(); // id -> {group, core, halo, ring, label, labelText, scale}
 function nodeFor(star) {
   let node = starNodes.get(star.id);
   if (!node) {
@@ -380,7 +361,7 @@ function nodeFor(star) {
     }));
     group.add(halo, core, ring);
     scene.add(group);
-    node = { group, core, halo, ring, label: null, labelText: null, enteredAt: performance.now(), scale: 0 };
+    node = { group, core, halo, ring, label: null, labelText: null, scale: 0 };
     starNodes.set(star.id, node);
   }
   return node;
@@ -466,7 +447,8 @@ function updateConnections(nowMs, drawEdges) {
       // (frantic flicker, especially with several strands fanned on one
       // edge). Both are now ~3x slower: a gentle multi-second drift.
       const pulse = animate ? 0.9 + 0.1 * Math.sin(nowMs * 0.0007 + seed) : 1;
-      strand.line.material.opacity = ev.brightness * 0.55 * pulse * fadeIn;
+      const visible = fadeIn * (ev.fade ?? 1) * revealMul;
+      strand.line.material.opacity = ev.brightness * 0.55 * pulse * visible;
 
       if (animate) {
         const speed = 0.00005 + (seed % 97) / 97 * 0.00006;
@@ -474,7 +456,7 @@ function updateConnections(nowMs, drawEdges) {
         const frac = (nowMs * speed + phase) % 1;
         quadBezier(tmpA, tmpM, tmpB, frac, tmpP);
         strand.photon.position.copy(tmpP);
-        strand.photon.material.opacity = ev.brightness * 0.8 * fadeIn;
+        strand.photon.material.opacity = ev.brightness * 0.8 * visible;
       } else {
         strand.photon.material.opacity = 0;
       }
@@ -503,15 +485,17 @@ const previewLine = new THREE.Line(previewGeom, new THREE.LineDashedMaterial({
 previewLine.computeLineDistances();
 scene.add(previewLine);
 
-// --- transient "light travels from you to them" on your own new declare ----
-const travelSprite = new THREE.Sprite(new THREE.SpriteMaterial({
-  map: haloTexture, color: 0xffe196, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-}));
-travelSprite.scale.set(14, 14, 1);
-scene.add(travelSprite);
-let travel = null; // {from, to, start, duration}
+// --- transient "light travels from A to B" on a new declaration -----------
+// Fired for your own declare immediately, and for anyone else's when the
+// poll notices a new event, so other viewers watch the light arrive too.
+const travels = []; // {fromId, toId, start, duration, sprite}
 function beginTravel(fromId, toId) {
-  travel = { fromId, toId, start: performance.now(), duration: 900 };
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: haloTexture, color: 0xffe196, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  sprite.scale.set(14, 14, 1);
+  scene.add(sprite);
+  travels.push({ fromId, toId, start: performance.now(), duration: 1400, sprite });
 }
 
 // --- interaction state -------------------------------------------------
@@ -587,27 +571,31 @@ window.addEventListener("pointerup", (e) => {
   dragging = false; dragStart = null;
 });
 
-// `stable: true` projects against `hitCamera` (never moved by
-// gravity-of-attention) instead of the live camera — that's the actual fix
-// for hover jitter; see hitCamera's own comment above. `stickyId` additionally
-// widens the hit radius for whichever star is already hovered, as a second
-// line of defence against the sky's own slow physics drift (CLAUDE.md) still
-// nudging a star just past the hit radius between frames. Clicks pass neither
-// option, so they stay pixel-accurate against what's actually rendered.
-function findStarAt(sx, sy, { stickyId, stable } = {}) {
-  const viewCamera = stable ? hitCamera : camera;
-  if (stickyId) {
-    const star = state.stars.find((s) => s.id === stickyId);
-    if (star) {
-      const p = physicsFor(star.id);
-      const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z), viewCamera);
-      if (!s.behind && Math.hypot(s.x - sx, s.y - sy) <= STAR_HIT_PX * 1.8) return star;
-    }
+function screenPosOf(id, viewCamera) {
+  const p = physicsFor(id);
+  return projectToScreen(new THREE.Vector3(p.x, p.y, p.z), viewCamera);
+}
+// The focused star's "zone" is a capsule from the screen point where it was
+// when focus began (`hoverAnchor`) to where it's rendered now, so the cursor
+// can stay put OR follow the star as gravity-of-attention pans it toward
+// centre without losing focus. Hover and click share this one test — they
+// used to use different cameras, so a click where the star had been missed
+// it once the pan had moved it.
+let hoverAnchor = null;
+function inFocusZone(id, sx, sy) {
+  const b = screenPosOf(id, camera);
+  if (b.behind) return false;
+  const a = hoverAnchor ?? b;
+  return pointToSegmentDistance(sx, sy, a.x, a.y, b.x, b.y) <= STAR_HIT_PX * 1.8;
+}
+function findStarAt(sx, sy) {
+  if (hoverStarId) {
+    const focused = state.stars.find((s) => s.id === hoverStarId);
+    if (focused && inFocusZone(focused.id, sx, sy)) return focused;
   }
   let best = null, bestDist = Infinity;
   for (const star of state.stars) {
-    const p = physicsFor(star.id);
-    const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z), viewCamera);
+    const s = screenPosOf(star.id, camera);
     if (s.behind) continue;
     const d = Math.hypot(s.x - sx, s.y - sy);
     if (d <= STAR_HIT_PX && d < bestDist) { bestDist = d; best = star; }
@@ -632,12 +620,29 @@ function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
+// When focus drops, the pan holds for HOVER_RELEASE_MS before easing back,
+// so moving from one star to the next doesn't slide the next one out from
+// under the cursor mid-reach.
+const HOVER_RELEASE_MS = 700;
 let hoverSince = 0;
+let hoverLostAt = -Infinity;
 function updateHover(e) {
-  if (historyMode || storyMode) return;
-  const star = findStarAt(e.clientX, e.clientY, { stickyId: hoverStarId, stable: true });
+  if (historyMode || storyMode || birthTracking()) return;
+  if (dragging && dragStart?.moved) {
+    if (hoverStarId) hoverLostAt = performance.now();
+    hoverStarId = null; hoverAnchor = null;
+    return;
+  }
+  const star = findStarAt(e.clientX, e.clientY);
   const id = star ? star.id : null;
-  if (id !== hoverStarId) hoverSince = performance.now();
+  if (id === hoverStarId) return;
+  if (id) {
+    hoverSince = performance.now();
+    hoverAnchor = screenPosOf(id, camera);
+  } else {
+    hoverLostAt = performance.now();
+    hoverAnchor = null;
+  }
   hoverStarId = id;
 }
 
@@ -675,7 +680,42 @@ function onCanvasClick(e) {
 }
 
 // --- claim / birth sequence --------------------------------------------
-let birthPending = false;
+// Darkness → your own star kindles (camera close and locked onto it, everyone
+// else hidden) → camera pulls back while the rest of the sky fades in → the
+// camera lets go of your star and settles on the whole constellation.
+const BIRTH_PULLBACK_S = 2.2;
+const BIRTH_RELEASE_S = 7;
+const BIRTH_END_S = 10;
+let birth = null; // {id, start, pulled}
+let revealMul = 1; // 0..1 brightness for everything that isn't your star, during birth
+function startBirth(id) {
+  const p = physicsFor(id);
+  cam.target.set(p.x, p.y, p.z);
+  cam.desired.target.set(p.x, p.y, p.z);
+  cam.radius = cam.desired.radius = 70;
+  cam.ease = 0.07;
+  hoverStarId = null;
+  birth = { id, start: performance.now(), pulled: false };
+}
+function birthTracking() {
+  return !!birth && (performance.now() - birth.start) / 1000 < BIRTH_RELEASE_S;
+}
+function stepBirth(nowMs) {
+  if (!birth) { revealMul = 1; return; }
+  const t = (nowMs - birth.start) / 1000;
+  if (t < BIRTH_RELEASE_S) {
+    const p = physicsFor(birth.id);
+    cam.desired.target.set(p.x, p.y, p.z);
+  }
+  if (t >= BIRTH_PULLBACK_S && !birth.pulled) {
+    birth.pulled = true;
+    cam.desired.radius = 900;
+    cam.ease = 0.015;
+  }
+  revealMul = Math.min(1, Math.max(0, (t - BIRTH_PULLBACK_S) / 3.5));
+  if (t >= BIRTH_END_S) { birth = null; cam.ease = 0.07; revealMul = 1; }
+}
+
 async function refreshMe() {
   const res = await fetch("/api/me");
   const data = await res.json();
@@ -715,9 +755,8 @@ birthForm.addEventListener("submit", async (e) => {
     ({ res, data } = await claim(pseudonym, true));
   }
   if (res.ok) {
-    birthPending = true;
-    cam.radius = 6; cam.desired.radius = 6; cam.ease = 0.02;
     await refreshMe();
+    if (me) startBirth(me.id);
     await pollState();
   } else {
     alert(data.error);
@@ -770,11 +809,15 @@ connectForm.addEventListener("submit", async (e) => {
     return;
   }
 
-  await fetch("/api/connect", {
+  const res = await fetch("/api/connect", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ to: selectedTargetId, type, note }),
   });
+  if (!res.ok) {
+    alert((await res.json()).error ?? "couldn't declare that connection");
+    return;
+  }
   connectPanel.classList.add("hidden");
   if (me && selectedTargetId) beginTravel(me.id, selectedTargetId);
   connectMode = false; setHint();
@@ -812,6 +855,7 @@ forgetBtn.addEventListener("click", async () => {
   await fetch("/api/forget", { method: "POST" });
   if (storyMode) exitStory();
   if (historyMode) exitHistory();
+  birth = null; revealMul = 1;
   me = null;
   connectMode = false;
   birthScreen.classList.remove("hidden");
@@ -852,14 +896,28 @@ timelineClose.addEventListener("click", () => timelinePanel.classList.add("hidde
 // (we don't re-derive a historical layout), since the point is to show which
 // stars and connections existed and how bright they were, not literally
 // where they sat that day.
+//
+// The timeline starts a little *before* the first star was born, so the far
+// left of the slider is an empty sky; scrubbing forward, stars appear first
+// and each connection then fades in over a stretch of history after its
+// date (`historyEdgeRampMs`), so it reads as "stars, then links" even when
+// a star's birthday and its first connection fall on the same day.
+let historyStartMs = Date.now();
+function historyTimelineStart() {
+  const now = Date.now();
+  const earliest = Math.min(now, ...state.stars.map((s) => new Date(s.created_at).getTime()));
+  return earliest - Math.max(86_400_000, (now - earliest) * 0.04);
+}
+function historyEdgeRampMs() {
+  return Math.max(2 * 86_400_000, (Date.now() - historyStartMs) * 0.03);
+}
 function enterHistory() {
   if (!state.stars.length) return;
   historyMode = true;
   connectMode = false; setHint();
   historyBar.classList.remove("hidden");
   historyBtn.classList.add("active");
-  const earliest = Math.min(...state.stars.map((s) => new Date(s.created_at).getTime()));
-  historySlider.dataset.earliest = String(earliest);
+  historyStartMs = historyTimelineStart();
   historySlider.value = "1000";
   applyHistorySlider();
 }
@@ -870,162 +928,142 @@ function exitHistory() {
   historyBtn.classList.remove("active");
 }
 function applyHistorySlider() {
-  const earliest = Number(historySlider.dataset.earliest || Date.now());
   const now = Date.now();
   const frac = Number(historySlider.value) / 1000;
-  historyAsOf = new Date(earliest + frac * (now - earliest));
+  historyAsOf = new Date(historyStartMs + frac * (now - historyStartMs));
   historyDate.textContent = historyAsOf.toISOString().slice(0, 10);
 }
 historyBtn.addEventListener("click", () => (historyMode ? exitHistory() : enterHistory()));
 historyClose.addEventListener("click", exitHistory);
 historySlider.addEventListener("input", applyHistorySlider);
 
-// --- story mode: a scroll-bound guided tour through four cinematic beats --
-// Reuses existing machinery rather than building a second tweening system:
-// every beat but "travel" moves the camera by writing into `cam.desired`
-// (the same damped orbit the rest of the app eases toward); "travel" is the
-// one exception, bypassing `cam.desired` for the duration of that single
-// scroll transition to fly the camera directly along a real connection's
-// curve, then handing control back by syncing `cam`'s actual spherical
-// state (not just `desired`) to the arrival pose so there's no snap. The
-// "memory" beat drives `historyMode`/`historicalState()` from scroll
-// position instead of a dragged slider — same reconstruction, same decay
-// math, just a different input. Opt-in via the `story` button, not
-// auto-played on first visit, and mutually exclusive with History — see
-// CLAUDE.md for why both are deliberate scope cuts.
-const STORY_BEATS = ["intro", "birth", "travel", "memory", "exit"];
-let storyFlightActive = false;
-let storyWasFlying = false;
-let storyFlightEndPose = null;
-let storySampleStarId = null;
-let storyEdge = null;
-let storyCurveA = null, storyCurveM = null, storyCurveB = null;
-let storyEarliest = Date.now();
+// --- story mode: a scroll-bound guided tour ----------------------------------
+// The camera is one continuous function of scroll progress p ∈ [0, 4] (one
+// unit per 100vh section), evaluated every frame from live star positions —
+// not a set of discrete beats handed between systems, which is what used to
+// make it jump. Progress itself is smoothed toward the real scroll position,
+// so wheel steps glide instead of stepping. Keyframes are spherical poses
+// (target + theta/phi/radius), interpolated with smoothstep:
+//   p=0 intro   wide view of the whole sky
+//   p=1 birth   close on a sample star A (your own, if you have a connection)
+//   1→2 travel  same viewing angle, target slides along A→B's connection curve
+//   p=2         close on B
+//   2→3 memory  pull back while the sky rewinds to before anyone existed
+//   3→4 exit    the sky re-forms up to today as the camera settles on the
+//               exact default Explore pose, so leaving Story never snaps.
+// Opt-in via the `story` button and mutually exclusive with History — see
+// CLAUDE.md.
+const STORY_SECTIONS = 4;
+let storyProgress = 0;
+let storyA = null, storyB = null, storyCurveLift = null;
+let storyHistoryStart = Date.now();
 
 function computeStoryScene() {
-  storyEdge = state.edges.find((e) => (e.events ?? []).length > 0) ?? null;
-  if (storyEdge) {
-    storySampleStarId = storyEdge.starA;
-    const pa = physicsFor(storyEdge.starA), pb = physicsFor(storyEdge.starB);
-    storyCurveA = { x: pa.x, y: pa.y, z: pa.z };
-    storyCurveB = { x: pb.x, y: pb.y, z: pb.z };
-    storyCurveM = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 + 40, z: (pa.z + pb.z) / 2 };
+  const edges = state.edges.filter((e) => (e.events ?? []).length > 0);
+  const mine = me ? edges.find((e) => e.starA === me.id || e.starB === me.id) : null;
+  const edge = mine ?? edges[0] ?? null;
+  if (edge) {
+    const aIsMe = me && edge.starB === me.id;
+    storyA = aIsMe ? edge.starB : edge.starA;
+    storyB = aIsMe ? edge.starA : edge.starB;
   } else {
-    storySampleStarId = state.stars[0]?.id ?? null;
-    storyCurveA = storyCurveM = storyCurveB = null;
+    storyA = storyB = me?.id ?? state.stars[0]?.id ?? null;
   }
-  storyEarliest = state.stars.length
-    ? Math.min(...state.stars.map((s) => new Date(s.created_at).getTime()))
-    : Date.now();
+  storyCurveLift = { x: 0, y: 40, z: 0 };
+  storyHistoryStart = historyTimelineStart();
 }
 
-function sphericalFromCamera(target) {
-  const rel = { x: camera.position.x - target.x, y: camera.position.y - target.y, z: camera.position.z - target.z };
-  const radius = Math.max(1, Math.hypot(rel.x, rel.y, rel.z));
-  const phi = Math.acos(Math.min(1, Math.max(-1, rel.y / radius)));
-  const theta = Math.atan2(rel.z, rel.x);
-  return { theta, phi, radius, target };
+const ORIGIN = { x: 0, y: 0, z: 0 };
+const STORY_DEFAULT = { theta: Math.PI * 0.25, phi: Math.PI * 0.38, radius: 900 };
+function storyStarPos(id) {
+  if (!id) return ORIGIN;
+  const p = physicsFor(id);
+  return { x: p.x, y: p.y, z: p.z };
 }
-
-function storyLerpPose(from, to, t) {
-  cam.desired.theta = from.theta + (to.theta - from.theta) * t;
-  cam.desired.phi = from.phi + (to.phi - from.phi) * t;
-  cam.desired.radius = from.radius + (to.radius - from.radius) * t;
-  cam.desired.target.set(
-    from.target.x + (to.target.x - from.target.x) * t,
-    from.target.y + (to.target.y - from.target.y) * t,
-    from.target.z + (to.target.z - from.target.z) * t,
-  );
+function smoothstep(t) { return t * t * (3 - 2 * t); }
+function lerpPoint(a, b, t) {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
 }
-
-function onStoryScroll() {
-  if (!storyMode) return;
-  const sections = storyScroll.querySelectorAll(".story-section");
-  const viewport = storyScroll.clientHeight || 1;
-  const idxFloat = storyScroll.scrollTop / viewport;
-  const idx = Math.max(0, Math.min(sections.length - 2, Math.floor(idxFloat)));
-  const frac = Math.max(0, Math.min(1, idxFloat - idx));
-  const beat = STORY_BEATS[idx];
-
-  const origin = { x: 0, y: 0, z: 0 };
-  const sampleTarget = sampleStarPos(storySampleStarId, origin);
-  const arrivalTarget = storyEdge ? sampleStarPos(storyEdge.starB, sampleTarget) : sampleTarget;
-
-  const POSE = {
-    intro: { theta: Math.PI * 0.22, phi: Math.PI * 0.4, radius: 1500, target: origin },
-    birth: { theta: Math.PI * 0.6, phi: Math.PI * 0.45, radius: 36, target: sampleTarget },
-    arrival: { theta: Math.PI * 0.95, phi: Math.PI * 0.45, radius: 36, target: arrivalTarget },
-    memoryWide: { theta: Math.PI * 0.05, phi: Math.PI * 0.4, radius: 650, target: origin },
-    exit: { theta: Math.PI * 0.25, phi: Math.PI * 0.38, radius: 900, target: origin },
+function lerpPose(a, b, t) {
+  return {
+    target: lerpPoint(a.target, b.target, t),
+    theta: a.theta + (b.theta - a.theta) * t,
+    phi: a.phi + (b.phi - a.phi) * t,
+    // log-space so a 60 → 900 zoom feels even rather than front-loaded
+    radius: Math.exp(Math.log(a.radius) + (Math.log(b.radius) - Math.log(a.radius)) * t),
   };
-
-  storyFlightActive = beat === "birth" && !!storyCurveA;
-
-  if (storyFlightActive) {
-    storyWasFlying = true;
-    quadBezier(storyCurveA, storyCurveM, storyCurveB, frac, tmpP);
-    camera.position.set(tmpP.x, tmpP.y, tmpP.z);
-    const ahead = { x: 0, y: 0, z: 0 };
-    quadBezier(storyCurveA, storyCurveM, storyCurveB, Math.min(1, frac + 0.08), ahead);
-    camera.lookAt(ahead.x, ahead.y, ahead.z);
-  } else {
-    if (storyWasFlying) {
-      storyFlightEndPose = sphericalFromCamera(arrivalTarget);
-      cam.theta = storyFlightEndPose.theta;
-      cam.phi = storyFlightEndPose.phi;
-      cam.radius = storyFlightEndPose.radius;
-      cam.target.set(arrivalTarget.x, arrivalTarget.y, arrivalTarget.z);
-      storyWasFlying = false;
-    }
-    if (beat === "intro") storyLerpPose(POSE.intro, POSE.birth, frac);
-    else if (beat === "birth") storyLerpPose(POSE.birth, POSE.birth, frac); // no real edge to fly along — hold
-    else if (beat === "travel") storyLerpPose(storyFlightEndPose ?? POSE.arrival, POSE.memoryWide, frac);
-    else if (beat === "memory") storyLerpPose(POSE.memoryWide, POSE.exit, frac);
-    else storyLerpPose(POSE.exit, POSE.exit, frac);
+}
+function storyPose(p) {
+  const A = storyStarPos(storyA), B = storyStarPos(storyB);
+  const close = { theta: Math.PI * 0.6, phi: Math.PI * 0.45, radius: 60 };
+  const intro = { target: ORIGIN, theta: Math.PI * 0.22, phi: Math.PI * 0.4, radius: 1500 };
+  const atA = { target: A, ...close };
+  const atB = { target: B, ...close };
+  const wide = { target: ORIGIN, theta: Math.PI * 0.05, phi: Math.PI * 0.4, radius: 650 };
+  const exit = { target: ORIGIN, ...STORY_DEFAULT };
+  if (p <= 1) return lerpPose(intro, atA, smoothstep(p));
+  if (p <= 2) {
+    const t = smoothstep(p - 1);
+    const mid = { x: (A.x + B.x) / 2 + storyCurveLift.x, y: (A.y + B.y) / 2 + storyCurveLift.y, z: (A.z + B.z) / 2 + storyCurveLift.z };
+    const onCurve = quadBezier(A, mid, B, t, { x: 0, y: 0, z: 0 });
+    return { target: onCurve, ...close };
   }
+  if (p <= 3) return lerpPose(atB, wide, smoothstep(p - 2));
+  return lerpPose(wide, exit, smoothstep(Math.min(1, p - 3)));
+}
 
-  if (beat === "memory") {
-    historyMode = true;
-    const now = Date.now();
-    historyAsOf = new Date(now - frac * (now - storyEarliest));
+function stepStory(dt) {
+  const viewport = storyScroll.clientHeight || 1;
+  const goal = Math.max(0, Math.min(STORY_SECTIONS, storyScroll.scrollTop / viewport));
+  storyProgress += (goal - storyProgress) * (1 - Math.exp(-dt * 5));
+  const pose = storyPose(storyProgress);
+  const sinPhi = Math.sin(pose.phi);
+  camera.position.set(
+    pose.target.x + pose.radius * sinPhi * Math.cos(pose.theta),
+    pose.target.y + pose.radius * Math.cos(pose.phi),
+    pose.target.z + pose.radius * sinPhi * Math.sin(pose.theta),
+  );
+  camera.lookAt(pose.target.x, pose.target.y, pose.target.z);
+  // mirror into `cam` so leaving Story mid-scroll eases from here, not a snap
+  cam.theta = pose.theta; cam.phi = pose.phi; cam.radius = pose.radius;
+  cam.target.set(pose.target.x, pose.target.y, pose.target.z);
+
+  const now = Date.now();
+  if (storyProgress > 2) {
+    // 2→3 rewinds today → before the first star; 3→4 replays forward to today
+    const back = storyProgress <= 3 ? smoothstep(storyProgress - 2) : 1 - smoothstep(Math.min(1, storyProgress - 3));
+    historyStartMs = storyHistoryStart;
+    historyAsOf = new Date(now - back * (now - storyHistoryStart));
+    historyMode = back > 0.001;
   } else {
     historyMode = false;
     historyAsOf = null;
   }
 }
-function sampleStarPos(id, fallback) {
-  if (!id) return fallback;
-  const p = physicsFor(id);
-  return { x: p.x, y: p.y, z: p.z };
-}
-storyScroll.addEventListener("scroll", onStoryScroll, { passive: true });
 
 function enterStory() {
   if (historyMode) exitHistory();
   connectMode = false;
   adminMode = false; adminFromId = null;
   adminBadge.classList.add("hidden");
+  hoverStarId = null;
   computeStoryScene();
   storyMode = true;
-  storyWasFlying = false;
-  storyFlightEndPose = null;
+  storyProgress = 0;
   storyBtn.classList.add("active");
   storyScroll.classList.remove("hidden");
   storyScroll.scrollTop = 0;
-  onStoryScroll();
   setHint();
 }
 function exitStory() {
   storyMode = false;
-  storyFlightActive = false;
-  storyWasFlying = false;
   historyMode = false;
   historyAsOf = null;
   storyBtn.classList.remove("active");
   storyScroll.classList.add("hidden");
-  cam.desired.theta = Math.PI * 0.25;
-  cam.desired.phi = Math.PI * 0.38;
-  cam.desired.radius = 900;
+  cam.desired.theta = STORY_DEFAULT.theta;
+  cam.desired.phi = STORY_DEFAULT.phi;
+  cam.desired.radius = STORY_DEFAULT.radius;
   cam.desired.target.set(0, 0, 0);
   setHint();
 }
@@ -1041,10 +1079,12 @@ function historicalState() {
     if (!starIds.has(edge.starA) || !starIds.has(edge.starB)) continue;
     const events = (edge.events ?? []).filter((ev) => new Date(ev.occurredOn).getTime() <= asOf);
     if (events.length === 0) continue;
+    const rampMs = historyEdgeRampMs();
     const recomputed = events.map((ev) => {
-      const ageDays = Math.max(0, (asOf - new Date(ev.occurredOn).getTime()) / 86_400_000);
+      const sinceMs = asOf - new Date(ev.occurredOn).getTime();
+      const ageDays = Math.max(0, sinceMs / 86_400_000);
       const recency = Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
-      return { ...ev, brightness: Math.max(0.12, Math.min(1, recency)) };
+      return { ...ev, brightness: Math.max(0.12, Math.min(1, recency)), fade: Math.min(1, sinceMs / rampMs) };
     });
     const mostRecent = Math.max(...recomputed.map((e) => new Date(e.occurredOn).getTime()));
     const ageDays = Math.max(0, (asOf - mostRecent) / 86_400_000);
@@ -1068,10 +1108,14 @@ function noteSpectacle(stars, edges) {
   if (knownEventCounts) {
     for (const e of edges) {
       const prev = knownEventCounts.get(e.id) ?? 0;
-      if (e.eventCount > prev && prev > 0) {
+      if (e.eventCount <= prev) continue;
+      if (prev > 0) {
         const strand = strands.get(`${e.id}:${e.eventCount - 1}`);
         if (strand) strand.bornAt = undefined; // replay the fade-in for the newest strand
       }
+      // events are ordered by date, so the last one is (almost always) the new one
+      const from = e.events?.[e.events.length - 1]?.declaredBy;
+      if (from && !(me && from === me.id)) beginTravel(from, from === e.starA ? e.starB : e.starA);
     }
   }
   knownStarIds = new Set(stars.map((s) => s.id));
@@ -1114,13 +1158,12 @@ function frame(nowMs) {
 
   const drawState = historyMode && historyAsOf ? historicalState() : state;
 
-  // birth reveal: once our own star exists, pull the camera back slowly
-  if (birthPending && me && starNodes.has(me.id)) {
-    birthPending = false;
-    setTimeout(() => { cam.desired.radius = 900; cam.ease = 0.015; setTimeout(() => (cam.ease = 0.07), 4500); }, 1400);
-  }
+  stepBirth(nowMs);
+  if (window.__dust) window.__dust.material.opacity = 0.55 * (0.15 + 0.85 * revealMul);
 
+  const drawnIds = new Set();
   for (const star of drawState.stars) {
+    drawnIds.add(star.id);
     const node = nodeFor(star);
     const p = physicsFor(star.id);
     node.group.position.set(p.x, p.y, p.z);
@@ -1131,21 +1174,22 @@ function frame(nowMs) {
     const idleMs = Date.now() - lastSeen;
     const status = idleMs < 15_000 ? "online" : idleMs < 10 * 60_000 ? "recent" : "dim";
 
-    const age = (nowMs - node.enteredAt) / 1000;
-    const entrance = Math.min(1, age / 1.6);
-    node.scale += (entrance - node.scale) * 0.08;
+    // grows in on first appearance and on reappearing in History; your own
+    // star kindles more slowly during the birth sequence
+    node.scale += (1 - node.scale) * (birth && isMe ? 0.025 : 0.04);
+    const reveal = isMe ? 1 : revealMul;
 
     const twinkle = animate && status === "online"
       ? 0.75 + 0.25 * Math.sin(animClock * 0.0012 * style.twinkleSpeed + style.twinklePhase)
       : 1;
     const baseR = (isMe ? 7 : 4.6 * style.sizeJitter) * node.scale;
     node.core.scale.set(baseR, baseR, 1);
-    node.core.material.opacity = (status === "dim" ? 0.35 : 0.95) * node.scale;
+    node.core.material.opacity = (status === "dim" ? 0.35 : 0.95) * node.scale * reveal;
 
     const haloR = baseR * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 2.4);
     node.halo.scale.set(haloR, haloR, 1);
     const haloAlpha = status === "online" ? 0.55 * twinkle : status === "recent" ? 0.3 : 0.08;
-    node.halo.material.opacity = haloAlpha * node.scale;
+    node.halo.material.opacity = haloAlpha * node.scale * reveal;
 
     node.ring.material.opacity = isMe && connectMode ? 0.5 + 0.3 * Math.sin(nowMs * 0.006) : 0;
     const ringR = baseR * 2.6;
@@ -1161,10 +1205,22 @@ function frame(nowMs) {
         node.group.add(node.label);
         node.labelText = star.pseudonym;
       }
-      node.label.material.opacity = 0.8 * node.scale;
+      // your own label too waits for the pull-back — up close it's huge
+      node.label.material.opacity = 0.8 * node.scale * revealMul;
     } else if (node.label) {
       node.label.material.opacity = 0;
     }
+  }
+
+  // Stars not in this frame's sky (History before their birth) fade out
+  // instead of keeping whatever opacity they last had.
+  for (const [id, node] of starNodes) {
+    if (drawnIds.has(id)) continue;
+    node.scale *= 0.88;
+    node.core.material.opacity *= 0.88;
+    node.halo.material.opacity *= 0.88;
+    node.ring.material.opacity = 0;
+    if (node.label) node.label.material.opacity *= 0.88;
   }
 
   updateConnections(animClock, drawState.edges);
@@ -1182,14 +1238,13 @@ function frame(nowMs) {
   }
 
   // travelling light from you to a just-declared connection
-  if (travel) {
-    const t = Math.min(1, (nowMs - travel.start) / travel.duration);
-    const a = physicsFor(travel.fromId), b = physicsFor(travel.toId);
-    travelSprite.position.lerpVectors(new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z), t);
-    travelSprite.material.opacity = Math.sin(Math.PI * t) * 0.9;
-    if (t >= 1) travel = null;
-  } else {
-    travelSprite.material.opacity = 0;
+  for (let i = travels.length - 1; i >= 0; i--) {
+    const tr = travels[i];
+    const t = Math.min(1, (nowMs - tr.start) / tr.duration);
+    const a = physicsFor(tr.fromId), b = physicsFor(tr.toId);
+    tr.sprite.position.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
+    tr.sprite.material.opacity = Math.sin(Math.PI * t) * 0.9;
+    if (t >= 1) { scene.remove(tr.sprite); tr.sprite.material.dispose(); travels.splice(i, 1); }
   }
 
   for (let i = spectacleLabels.length - 1; i >= 0; i--) {
@@ -1207,11 +1262,13 @@ function frame(nowMs) {
   // camera mid-click — that abrupt pan read as the page "twitching" right
   // when clicking someone else's star, since moving the cursor onto a star
   // and clicking it happens well inside that 300ms window.
-  if (!historyMode && !storyMode && hoverStarId) {
+  if (birthTracking() || storyMode) {
+    // birth and Story own the camera target
+  } else if (!historyMode && hoverStarId) {
     const p = physicsFor(hoverStarId);
     const pull = Math.min(1, (nowMs - hoverSince) / 300) * 0.3;
     cam.desired.target.set(p.x * pull, p.y * pull, p.z * pull);
-  } else if (!historyMode && !storyMode) {
+  } else if (!historyMode && nowMs - hoverLostAt > HOVER_RELEASE_MS) {
     cam.desired.target.set(0, 0, 0);
   }
 
@@ -1234,7 +1291,8 @@ function frame(nowMs) {
     hoverLabel.classList.add("hidden");
   }
 
-  if (!storyFlightActive) applyCamera();
+  if (storyMode) stepStory(dt);
+  else applyCamera();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
