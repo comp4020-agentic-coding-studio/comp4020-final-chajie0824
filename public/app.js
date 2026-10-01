@@ -691,22 +691,36 @@ async function refreshMe() {
   }
 }
 
-birthForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const pseudonym = document.getElementById("pseudonym").value;
+async function claim(pseudonym, confirmDuplicate) {
   const res = await fetch("/api/claim", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pseudonym }),
+    body: JSON.stringify({ pseudonym, confirmDuplicate }),
   });
+  return { res, data: await res.json() };
+}
+
+birthForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const pseudonym = document.getElementById("pseudonym").value;
+  let { res, data } = await claim(pseudonym, false);
+  if (res.ok && data.duplicate) {
+    // Gentle heads-up, not a hard block: a reused name after "forget" (or
+    // two different people sharing a name) both land here. No forced
+    // rename, no merging — just make sure it's a deliberate choice.
+    const proceed = confirm(
+      `"${pseudonym.trim()}" is already a star in this sky. Is that you coming back, or someone else with the same name? Either way, continuing creates a new star.`,
+    );
+    if (!proceed) return;
+    ({ res, data } = await claim(pseudonym, true));
+  }
   if (res.ok) {
     birthPending = true;
     cam.radius = 6; cam.desired.radius = 6; cam.ease = 0.02;
     await refreshMe();
     await pollState();
   } else {
-    const { error } = await res.json();
-    alert(error);
+    alert(data.error);
   }
 });
 

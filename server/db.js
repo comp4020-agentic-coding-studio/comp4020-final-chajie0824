@@ -62,6 +62,10 @@ export function getStar(id) {
   return db.prepare("SELECT * FROM stars WHERE id = ?").get(id) ?? null;
 }
 
+export function pseudonymExists(pseudonym) {
+  return !!db.prepare("SELECT 1 FROM stars WHERE pseudonym = ?").get(pseudonym);
+}
+
 export function touchStar(id) {
   db.prepare("UPDATE stars SET last_seen_at = ? WHERE id = ?").run(new Date().toISOString(), id);
 }

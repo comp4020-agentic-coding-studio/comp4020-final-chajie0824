@@ -106,6 +106,19 @@ connections, brightness comes from a log of events on that edge. See
   star just stays in the sky, now un-owned by any browser, and the birth
   screen reappears for a brand new one.
 
+- **Claiming an already-used pseudonym gets a gentle confirm, never a hard
+  reject or a silent merge.** Because "forget" never deletes the old star
+  (above), reusing a name after a reset will always collide with the star
+  you just orphaned — and two unrelated people can legitimately share a
+  name anyway. `POST /api/claim` checks `pseudonymExists()` and, unless the
+  request carries `confirmDuplicate: true`, responds `200 { duplicate: true }`
+  instead of creating a star; the client shows one `confirm()` (same pattern
+  as the forget button) asking whether this is the same person coming back
+  or someone else, then resubmits with `confirmDuplicate: true` to actually
+  create it. No automatic rename, no identity merging — the new star is
+  always fully independent of the old one, same as any other same-name
+  collision.
+
 - **Hover hit-testing projects against `hitCamera`, a second never-rendered
   camera kept at the same orbit as the live one but always looking at the
   true origin, instead of the live camera `cam.desired.target` actually

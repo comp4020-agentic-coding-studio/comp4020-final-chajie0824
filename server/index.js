@@ -4,6 +4,7 @@ import { marked } from "marked";
 import {
   createStar,
   getStar,
+  pseudonymExists,
   touchStar,
   renameStar,
   declareConnection,
@@ -125,9 +126,17 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/claim") {
       if (currentStar(req)) return send(res, 400, { error: "already claimed a star in this browser" });
-      const { pseudonym } = await readJsonBody(req);
+      const { pseudonym, confirmDuplicate } = await readJsonBody(req);
       const name = String(pseudonym ?? "").trim().slice(0, 40);
       if (!name) return send(res, 400, { error: "pseudonym can't be empty" });
+      // A gentle, non-blocking heads-up when the name is already in the sky —
+      // never a hard reject (two different people can share a name, and
+      // "forget" never deletes the old star either — see CLAUDE.md). The
+      // client shows a confirm prompt once and resubmits with
+      // confirmDuplicate:true to proceed past this check.
+      if (!confirmDuplicate && pseudonymExists(name)) {
+        return send(res, 200, { duplicate: true });
+      }
       const star = createStar(name);
       res.setHeader(
         "set-cookie",
