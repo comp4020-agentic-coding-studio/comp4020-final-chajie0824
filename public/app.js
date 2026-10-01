@@ -85,37 +85,43 @@ function buildSky() {
     "255, 214, 170", // warm amber (cooler stars)
   ];
   for (let layer = 0; layer < 3; layer++) {
-    const count = [90, 70, 50][layer];
+    const count = [130, 100, 60][layer];
     for (let i = 0; i < count; i++) {
       const angle = rand() * Math.PI * 2;
-      const radius = 200 + rand() * 2600;
+      const radius = 150 + rand() * 2600;
       layers[layer].push({
         angle,
         radius,
-        r: 0.5 + rand() * (layer === 2 ? 1.6 : 0.9),
+        r: 0.5 + rand() * (layer === 2 ? 2 : 1),
         color: STAR_COLORS[Math.floor(rand() * STAR_COLORS.length)],
-        baseAlpha: 0.25 + rand() * 0.5,
+        baseAlpha: 0.35 + rand() * 0.55,
         twinkleSpeed: 0.3 + rand() * 0.9,
         twinklePhase: rand() * Math.PI * 2,
       });
     }
   }
   const nebulae = [];
-  const NEBULA_COLORS = ["80, 70, 200", "40, 110, 190", "150, 60, 170"];
-  for (let i = 0; i < 4; i++) {
+  const NEBULA_COLORS = ["120, 90, 230", "60, 140, 220", "190, 80, 190", "90, 180, 210"];
+  for (let i = 0; i < 5; i++) {
     const angle = rand() * Math.PI * 2;
-    const radius = 300 + rand() * 1400;
+    // spread across a wide ring so the default view sees a soft edge of one
+    // or two blobs, not every blob stacked under the camera at once (additive
+    // blending compounds fast — a little goes a long way)
+    const radius = 500 + rand() * 1500;
     nebulae.push({
       angle,
       radius,
-      size: 650 + rand() * 900,
+      size: 700 + rand() * 1000,
       color: NEBULA_COLORS[i % NEBULA_COLORS.length],
-      alpha: 0.11 + rand() * 0.1,
+      alpha: 0.1 + rand() * 0.09,
       driftSpeed: 0.02 + rand() * 0.03,
       driftPhase: rand() * Math.PI * 2,
     });
   }
-  return { layers, nebulae };
+  // one broad, faint "dust lane" streak across the sky for depth, like a
+  // sliver of Milky Way — a single very low-alpha elongated band
+  const band = { angle: rand() * Math.PI * 2, tilt: rand() * Math.PI * 2 };
+  return { layers, nebulae, band };
 }
 const sky = buildSky();
 const PARALLAX = [0.25, 0.45, 0.7]; // how much each layer moves when you pan
@@ -245,6 +251,28 @@ function styleFor(id) {
 function drawSky(t) {
   const rotation = animate ? t * ROTATION_SPEED : 0;
 
+  // nebula + dust lane are additive glow, not flat alpha-over-black — "screen"/
+  // "lighter" is what actually makes a glow read as colour instead of a barely
+  // visible grey wash on a near-black canvas (plain source-over just darkens
+  // toward the background instead of lighting it up)
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+
+  const bandAngle = sky.band.angle + rotation * 0.1;
+  const bandLen = Math.max(canvas.width, canvas.height) * 1.4;
+  const bx = canvas.width / 2 - camera.x * 0.08 * camera.scale;
+  const by = canvas.height / 2 - camera.y * 0.08 * camera.scale;
+  ctx.save();
+  ctx.translate(bx, by);
+  ctx.rotate(bandAngle);
+  const bandGrad = ctx.createLinearGradient(0, -220, 0, 220);
+  bandGrad.addColorStop(0, "rgba(120, 110, 200, 0)");
+  bandGrad.addColorStop(0.5, "rgba(130, 120, 210, 0.035)");
+  bandGrad.addColorStop(1, "rgba(120, 110, 200, 0)");
+  ctx.fillStyle = bandGrad;
+  ctx.fillRect(-bandLen / 2, -220, bandLen, 440);
+  ctx.restore();
+
   for (const nebula of sky.nebulae) {
     const drift = animate ? Math.sin(t * 0.00005 * nebula.driftSpeed + nebula.driftPhase) * 60 : 0;
     const angle = nebula.angle + rotation;
@@ -254,13 +282,16 @@ function drawSky(t) {
     const size = nebula.size * camera.scale;
     const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, size);
     g.addColorStop(0, `rgba(${nebula.color}, ${nebula.alpha})`);
+    g.addColorStop(0.4, `rgba(${nebula.color}, ${nebula.alpha * 0.3})`);
     g.addColorStop(1, `rgba(${nebula.color}, 0)`);
     ctx.fillStyle = g;
     ctx.fillRect(s.x - size, s.y - size, size * 2, size * 2);
   }
+  ctx.restore();
 
   sky.layers.forEach((layer, i) => {
     const parallax = PARALLAX[i];
+    const bloom = i === 2; // nearest layer gets a soft point-glow, not just a flat dot
     for (const star of layer) {
       const angle = star.angle + rotation * (0.3 + i * 0.2);
       const wx = Math.cos(angle) * star.radius;
@@ -271,8 +302,19 @@ function drawSky(t) {
       };
       if (s.x < -20 || s.x > canvas.width + 20 || s.y < -20 || s.y > canvas.height + 20) continue;
       const twinkle = animate ? 0.5 + 0.5 * Math.sin(t * 0.0012 * star.twinkleSpeed + star.twinklePhase) : 1;
+      const r = star.r * Math.min(1.3, camera.scale);
+      if (bloom) {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const glow = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r * 5);
+        glow.addColorStop(0, `rgba(${star.color}, ${0.5 * star.baseAlpha * twinkle})`);
+        glow.addColorStop(1, `rgba(${star.color}, 0)`);
+        ctx.fillStyle = glow;
+        ctx.fillRect(s.x - r * 5, s.y - r * 5, r * 10, r * 10);
+        ctx.restore();
+      }
       ctx.beginPath();
-      ctx.arc(s.x, s.y, star.r * Math.min(1.3, camera.scale), 0, Math.PI * 2);
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(${star.color}, ${star.baseAlpha * twinkle})`;
       ctx.fill();
     }
@@ -298,12 +340,15 @@ function draw(t) {
     const alpha = edge.brightness * (edge.mutual ? 0.85 : 0.45) * pulse;
 
     if (edge.mutual) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
-      ctx.lineWidth = 4.5 * camera.scale;
-      ctx.strokeStyle = `rgba(154, 209, 255, ${alpha * 0.18})`;
+      ctx.lineWidth = 7 * camera.scale;
+      ctx.strokeStyle = `rgba(154, 209, 255, ${alpha * 0.3})`;
       ctx.stroke();
+      ctx.restore();
     }
 
     ctx.beginPath();
@@ -334,11 +379,15 @@ function draw(t) {
     }
 
     const glowColor = isMe ? "255, 225, 150" : style.color.glow;
-    const glow = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r * 6);
-    glow.addColorStop(0, `rgba(${glowColor}, ${0.9 * twinkle})`);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const glow = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r * 8);
+    glow.addColorStop(0, `rgba(${glowColor}, ${0.75 * twinkle})`);
+    glow.addColorStop(0.35, `rgba(${glowColor}, ${0.28 * twinkle})`);
     glow.addColorStop(1, `rgba(${glowColor}, 0)`);
     ctx.fillStyle = glow;
-    ctx.fillRect(s.x - r * 6, s.y - r * 6, r * 12, r * 12);
+    ctx.fillRect(s.x - r * 8, s.y - r * 8, r * 16, r * 16);
+    ctx.restore();
 
     ctx.beginPath();
     ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
