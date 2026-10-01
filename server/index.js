@@ -114,6 +114,15 @@ const server = createServer(async (req, res) => {
       return send(res, 200, { star: star ? { id: star.id, pseudonym: star.pseudonym } : null });
     }
 
+    // Unlinks this browser from its star so it can claim a brand new one and
+    // see the birth screen again. Doesn't delete the star or its history —
+    // that'd fight the append-only principle above — it just clears the
+    // cookie; the old star stays in the sky, now un-owned by any browser.
+    if (req.method === "POST" && url.pathname === "/api/forget") {
+      res.setHeader("set-cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+      return send(res, 200, { ok: true });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/claim") {
       if (currentStar(req)) return send(res, 400, { error: "already claimed a star in this browser" });
       const { pseudonym } = await readJsonBody(req);

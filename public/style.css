@@ -155,7 +155,7 @@ button:hover { opacity: 0.85; }
 #hud strong { color: var(--ink); font-weight: 600; }
 .me { display: flex; align-items: center; gap: 0.35rem; }
 
-#rename-btn {
+#rename-btn, #forget-btn {
   background: transparent;
   border: none;
   color: var(--faint);
@@ -164,7 +164,7 @@ button:hover { opacity: 0.85; }
   padding: 0.1rem 0.3rem;
   border-radius: 6px;
 }
-#rename-btn:hover { color: var(--accent); background: rgba(154, 209, 255, 0.08); }
+#rename-btn:hover, #forget-btn:hover { color: var(--accent); background: rgba(154, 209, 255, 0.08); }
 
 .hud-controls { margin-left: auto; display: flex; align-items: center; gap: 0.8rem; }
 .toggle {

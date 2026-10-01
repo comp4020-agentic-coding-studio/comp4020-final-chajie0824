@@ -15,6 +15,7 @@ const hudStats = document.getElementById("hud-stats");
 const meName = document.getElementById("me-name");
 const modeHint = document.getElementById("mode-hint");
 const renameBtn = document.getElementById("rename-btn");
+const forgetBtn = document.getElementById("forget-btn");
 const renamePanel = document.getElementById("rename-panel");
 const renameForm = document.getElementById("rename-form");
 const renameInput = document.getElementById("rename-input");
@@ -565,7 +566,23 @@ window.addEventListener("pointerup", (e) => {
   dragging = false; dragStart = null;
 });
 
-function findStarAt(sx, sy) {
+// `stickyId`, when given a larger hit radius for that one star, gives hover
+// detection hysteresis: gravity-of-attention (below) eases the camera toward
+// whoever's hovered, which nudges that star's own screen position a little —
+// without slack here, that nudge can carry the cursor just past the plain
+// hit radius, dropping hover, re-centering the camera, landing the cursor
+// back inside, re-triggering hover... a visible jitter loop as soon as
+// someone tries to track a star with the mouse. Click hit-testing passes no
+// stickyId, so it's unaffected — this only steadies hover.
+function findStarAt(sx, sy, stickyId) {
+  if (stickyId) {
+    const star = state.stars.find((s) => s.id === stickyId);
+    if (star) {
+      const p = physicsFor(star.id);
+      const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z));
+      if (!s.behind && Math.hypot(s.x - sx, s.y - sy) <= STAR_HIT_PX * 1.8) return star;
+    }
+  }
   let best = null, bestDist = Infinity;
   for (const star of state.stars) {
     const p = physicsFor(star.id);
@@ -597,7 +614,7 @@ function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
 let hoverSince = 0;
 function updateHover(e) {
   if (historyMode || storyMode) return;
-  const star = findStarAt(e.clientX, e.clientY);
+  const star = findStarAt(e.clientX, e.clientY, hoverStarId);
   const id = star ? star.id : null;
   if (id !== hoverStarId) hoverSince = performance.now();
   hoverStarId = id;
@@ -753,6 +770,17 @@ renameForm.addEventListener("submit", async (e) => {
     const { error } = await res.json();
     alert(error);
   }
+});
+
+forgetBtn.addEventListener("click", async () => {
+  if (!confirm("Forget this browser's star and start over? Your current star stays in the sky — this browser just stops being it.")) return;
+  await fetch("/api/forget", { method: "POST" });
+  if (storyMode) exitStory();
+  if (historyMode) exitHistory();
+  me = null;
+  connectMode = false;
+  birthScreen.classList.remove("hidden");
+  hud.classList.add("hidden");
 });
 
 // --- timeline (kept public, per CLAUDE.md) --------------------------------

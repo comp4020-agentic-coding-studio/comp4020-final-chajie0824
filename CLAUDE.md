@@ -97,6 +97,26 @@ connections, brightness comes from a log of events on that edge. See
   behaviour outside Story — that's a natural follow-up once the curve-flight
   code exists, not something "build Story Mode" required.
 
+- **"Forget this star" (`POST /api/forget`, the &#8634; button next to rename)
+  only unlinks the browser's cookie — it never deletes the star or any of its
+  history.** The cookie is `HttpOnly`, so a client-side fix alone can't clear
+  it; this needed a real server route, not a `document.cookie` hack. Deleting
+  the star to "start fresh" would contradict the append-only rule above in
+  spirit, even though it's not literally an `edge_events` edit — so the old
+  star just stays in the sky, now un-owned by any browser, and the birth
+  screen reappears for a brand new one.
+
+- **Hover hit-testing uses a wider "sticky" radius for whoever's already
+  hovered (`findStarAt`'s `stickyId` param), not the same plain radius used
+  for clicks.** Gravity-of-attention (above) eases the camera toward the
+  hovered star, which nudges that star's own screen position a little; at
+  the plain hit radius that nudge could carry the cursor just outside it,
+  dropping hover, re-centering the camera, landing the cursor back inside,
+  re-triggering hover — a visible jitter loop the instant someone tried to
+  track a star with the mouse. The wider sticky radius only applies to
+  *keeping* an existing hover, never to clicks or to acquiring a new one, so
+  it doesn't make clicking less precise.
+
 ## Stack, briefly
 
 Server: plain Node (`node:http`, `node:sqlite`), `marked` for `/readme/` — no
