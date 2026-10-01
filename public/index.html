@@ -5,14 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Constellation</title>
     <link rel="stylesheet" href="/style.css" />
+    <script type="importmap">
+      { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" } }
+    </script>
   </head>
   <body>
-    <div id="claim-screen" class="overlay">
-      <form id="claim-form">
-        <h1>Constellation</h1>
-        <p class="tagline">Everyone here is a star. Claim yours.</p>
-        <input id="pseudonym" name="pseudonym" maxlength="40" placeholder="a name for your star" autocomplete="off" required />
-        <button type="submit">Claim my star</button>
+    <div id="birth-screen" class="overlay">
+      <form id="birth-form">
+        <p class="birth-line">No star belongs to you yet.</p>
+        <input id="pseudonym" name="pseudonym" maxlength="40" placeholder="enter your name" autocomplete="off" required />
         <p class="hint">Remembered by this browser — no account, no password.</p>
       </form>
     </div>
@@ -20,15 +21,23 @@
     <canvas id="sky"></canvas>
 
     <div id="hud" class="hidden">
-      <div class="me">you are <strong id="me-name"></strong><button id="rename-btn" title="rename your star" type="button">&#9998;</button></div>
-      <span class="hint">click another star to declare a connection</span>
-      <label id="animate-toggle" class="toggle">
-        <input type="checkbox" id="animate-checkbox" checked />
-        <span>animate sky</span>
-      </label>
+      <div class="hud-top">
+        <div class="hud-title">CONSTELLATION</div>
+        <div class="hud-stats" id="hud-stats"></div>
+      </div>
+      <div class="hud-bottom">
+        <div class="me">you are <strong id="me-name"></strong><button id="rename-btn" title="rename your star" type="button">&#9998;</button></div>
+        <span class="hint" id="mode-hint">click your star, then another, to connect</span>
+        <div class="hud-controls">
+          <label class="toggle"><input type="checkbox" id="animate-checkbox" checked /><span>animate</span></label>
+          <button id="history-btn" type="button" class="ghost-btn">history</button>
+        </div>
+      </div>
     </div>
 
-    <div id="connect-modal" class="overlay hidden">
+    <div id="hover-label" class="floating hidden"></div>
+
+    <div id="connect-panel" class="floating-panel hidden">
       <form id="connect-form">
         <h2>Connect to <span id="connect-target"></span></h2>
         <label><input type="radio" name="type" value="know" checked /> I know this person</label>
@@ -43,7 +52,7 @@
       </form>
     </div>
 
-    <div id="rename-modal" class="overlay hidden">
+    <div id="rename-panel" class="floating-panel hidden">
       <form id="rename-form">
         <h2>Rename your star</h2>
         <input id="rename-input" maxlength="40" autocomplete="off" required />
@@ -60,8 +69,16 @@
       <ol id="timeline-list"></ol>
     </aside>
 
+    <div id="history-bar" class="hidden">
+      <div class="history-label">
+        <span id="history-date"></span>
+        <button id="history-close" type="button">&times; back to now</button>
+      </div>
+      <input id="history-slider" type="range" min="0" max="1000" value="1000" step="1" />
+    </div>
+
     <a id="readme-link" href="/readme/">about this constellation</a>
 
-    <script src="/app.js"></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

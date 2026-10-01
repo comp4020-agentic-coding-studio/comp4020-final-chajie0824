@@ -31,12 +31,19 @@ connections, brightness comes from a log of events on that edge. See
   seeded with a fixed constant (`SKY_SEED`), not derived from real data — they
   must stay visually distinct from (smaller/dimmer than) actual people-stars.
 - **Idle motion is real-time theatre, not the real-time requirement, and it's
-  opt-in.** The "animate sky" toggle (twinkle, nebula drift, slow background
-  rotation) is a purely client-side, `localStorage`-persisted viewer
-  preference — never gate any actual feature on it, and never let it rotate
-  or move the people-stars/edges themselves (they must stay at their
-  deterministic positions so clicking stays precise and the layout stays
-  legible across visits).
+  opt-in.** The "animate sky" toggle (twinkle, travelling light on
+  connections, background drift) is a purely client-side,
+  `localStorage`-persisted viewer preference — never gate any actual feature
+  on it. This used to mean people-stars/edges stayed at fixed deterministic
+  positions; since the Three.js redesign (below) that's no longer true on
+  purpose — stars now *seed* at a deterministic spot (same `hashString(id)`
+  every load) and then relax under a small, heavily-damped force simulation
+  (repulsion between all stars, weak spring attraction along edges, gentle
+  centering), so the social graph visibly, slowly shapes the sky. Hit-testing
+  always re-projects the *current* simulated position each frame, so this
+  must never make clicking imprecise — if a future change makes stars drift
+  fast enough that clicks miss, that's a bug in the damping, not an
+  acceptable tradeoff.
 - **`/readme/` must keep carrying every heading in `README.md`, in order.**
   `spec/invariants.test.ts` checks this and is not to be edited — if a README
   rewrite breaks it, fix the README's headings or the renderer, not the spec.
@@ -50,7 +57,23 @@ connections, brightness comes from a log of events on that edge. See
 
 ## Stack, briefly
 
-Plain Node (`node:http`, `node:sqlite`), `marked` for `/readme/`, vanilla
-Canvas2D frontend — no framework, no bundler, no build step. This is a
-deliberate choice for a 256 MB single machine, not an oversight; don't
-introduce a framework or a bundler to "clean up" the frontend.
+Server: plain Node (`node:http`, `node:sqlite`), `marked` for `/readme/` — no
+framework, no bundler, no build step. This is a deliberate choice for a
+256 MB single machine, not an oversight; don't introduce a framework or a
+bundler on the server to "clean up" anything.
+
+Frontend: Three.js, loaded in the browser via a pinned CDN URL through a
+native `<script type="importmap">` in `public/index.html` — no npm
+dependency, no bundler, no build step; the browser resolves the bare `"three"`
+specifier itself. This replaced an earlier vanilla-Canvas2D frontend once the
+design called for real depth, a semi-physical layout, and per-event light
+travelling along curves — things Canvas2D can't do well. It's a conscious,
+documented revision of this file's former "no framework" line, not a silent
+departure from it: that line's actual reasoning was always the 256 MB
+**server**-process budget, and a CDN-loaded, browser-only library spends none
+of that budget — it adds zero server memory, zero server process, zero
+install step (`fly.toml` itself notes the stack is ours to choose; Fly just
+runs whatever the Dockerfile produces). If a future change needs an actual
+npm-installed frontend *build* step (bundler, JSX, etc.), that's a bigger
+decision than this one and should get the same explicit, written-down
+treatment here rather than creeping in quietly.

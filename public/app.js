@@ -1,49 +1,59 @@
-// Constellation — W9 slice. State is polled, not pushed (that's W10's job);
-// this is just enough to feel alive across a handful of open tabs.
+// Constellation — Three.js redesign. State is polled, not pushed (that's
+// W10's job); this file turns the poll into a semi-physical, deep, luminous
+// sky instead of a flat network graph. See CLAUDE.md for the architecture
+// decision behind adopting Three.js here (client-only, zero server cost).
+import * as THREE from "three";
 
+const HALF_LIFE_DAYS = 21; // mirrors server/db.js — needed to recompute historical brightness client-side
+
+// --- DOM refs --------------------------------------------------------------
 const canvas = document.getElementById("sky");
-const ctx = canvas.getContext("2d");
-
-const claimScreen = document.getElementById("claim-screen");
-const claimForm = document.getElementById("claim-form");
+const birthScreen = document.getElementById("birth-screen");
+const birthForm = document.getElementById("birth-form");
 const hud = document.getElementById("hud");
+const hudStats = document.getElementById("hud-stats");
 const meName = document.getElementById("me-name");
+const modeHint = document.getElementById("mode-hint");
 const renameBtn = document.getElementById("rename-btn");
-const renameModal = document.getElementById("rename-modal");
+const renamePanel = document.getElementById("rename-panel");
 const renameForm = document.getElementById("rename-form");
 const renameInput = document.getElementById("rename-input");
 const renameCancel = document.getElementById("rename-cancel");
-const connectModal = document.getElementById("connect-modal");
+const connectPanel = document.getElementById("connect-panel");
 const connectForm = document.getElementById("connect-form");
 const connectTarget = document.getElementById("connect-target");
 const connectNote = document.getElementById("connect-note");
 const connectCancel = document.getElementById("connect-cancel");
+const hoverLabel = document.getElementById("hover-label");
 const timelinePanel = document.getElementById("timeline-panel");
 const timelineTitle = document.getElementById("timeline-title");
 const timelineList = document.getElementById("timeline-list");
 const timelineClose = document.getElementById("timeline-close");
 const animateCheckbox = document.getElementById("animate-checkbox");
+const historyBtn = document.getElementById("history-btn");
+const historyBar = document.getElementById("history-bar");
+const historySlider = document.getElementById("history-slider");
+const historyDate = document.getElementById("history-date");
+const historyClose = document.getElementById("history-close");
 
 let me = null;
 let state = { stars: [], edges: [] };
-let selectedStarId = null; // target for the next "declare a connection"
+let historyMode = false;
+let historyAsOf = null; // Date, only while historyMode
 
-// --- animate toggle (purely a viewer preference, not server state) --------
+// animate toggle is a pure viewer preference — never gates a feature
 let animate = true;
 try {
   const saved = localStorage.getItem("constellation:animate");
   if (saved !== null) animate = saved === "1";
-} catch { /* private browsing etc: fall back to the default */ }
+} catch {}
 animateCheckbox.checked = animate;
 animateCheckbox.addEventListener("change", () => {
   animate = animateCheckbox.checked;
   try { localStorage.setItem("constellation:animate", animate ? "1" : "0"); } catch {}
 });
 
-// --- stable layout -----------------------------------------------------
-// The server has no notion of position, so each star's spot in the sky is
-// derived deterministically from its id: same id -> same spot, every poll,
-// every reload, no jitter.
+// --- deterministic seeds -----------------------------------------------
 function mulberry32(seed) {
   return function () {
     seed |= 0;
@@ -58,180 +68,15 @@ function hashString(s) {
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
   return h;
 }
-const positionCache = new Map();
-function positionFor(id) {
-  if (positionCache.has(id)) return positionCache.get(id);
-  const rand = mulberry32(hashString(id));
-  const angle = rand() * Math.PI * 2;
-  const radius = 120 + rand() * 900;
-  const pos = { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
-  positionCache.set(id, pos);
-  return pos;
-}
 
-// A person's star still sits at a fixed, meaningful spot (so it stays
-// click-able and the "map" of the sky stays legible). But a real sky isn't
-// just a handful of named dots on flat black — it has depth, dust, and
-// thousands of background stars that aren't anyone in particular. This is
-// purely decorative and purely client-side: a fixed seed so it looks the
-// same on every visit, not regenerated per session.
-const SKY_SEED = 1337;
-function buildSky() {
-  const rand = mulberry32(SKY_SEED);
-  const layers = [[], [], []]; // far -> near, far layer parallaxes least
-  const STAR_COLORS = [
-    "232, 230, 240", // neutral white (most common, like our sun's neighbours)
-    "173, 216, 255", // blue-white (hot, young stars)
-    "255, 214, 170", // warm amber (cooler stars)
-  ];
-  for (let layer = 0; layer < 3; layer++) {
-    const count = [130, 100, 60][layer];
-    for (let i = 0; i < count; i++) {
-      const angle = rand() * Math.PI * 2;
-      const radius = 150 + rand() * 2600;
-      layers[layer].push({
-        angle,
-        radius,
-        r: 0.5 + rand() * (layer === 2 ? 2 : 1),
-        color: STAR_COLORS[Math.floor(rand() * STAR_COLORS.length)],
-        baseAlpha: 0.35 + rand() * 0.55,
-        twinkleSpeed: 0.3 + rand() * 0.9,
-        twinklePhase: rand() * Math.PI * 2,
-      });
-    }
-  }
-  const nebulae = [];
-  const NEBULA_COLORS = ["120, 90, 230", "60, 140, 220", "190, 80, 190", "90, 180, 210"];
-  for (let i = 0; i < 5; i++) {
-    const angle = rand() * Math.PI * 2;
-    // spread across a wide ring so the default view sees a soft edge of one
-    // or two blobs, not every blob stacked under the camera at once (additive
-    // blending compounds fast — a little goes a long way)
-    const radius = 500 + rand() * 1500;
-    nebulae.push({
-      angle,
-      radius,
-      size: 700 + rand() * 1000,
-      color: NEBULA_COLORS[i % NEBULA_COLORS.length],
-      alpha: 0.1 + rand() * 0.09,
-      driftSpeed: 0.02 + rand() * 0.03,
-      driftPhase: rand() * Math.PI * 2,
-    });
-  }
-  // one broad, faint "dust lane" streak across the sky for depth, like a
-  // sliver of Milky Way — a single very low-alpha elongated band
-  const band = { angle: rand() * Math.PI * 2, tilt: rand() * Math.PI * 2 };
-  return { layers, nebulae, band };
-}
-const sky = buildSky();
-const PARALLAX = [0.25, 0.45, 0.7]; // how much each layer moves when you pan
-const ROTATION_SPEED = (Math.PI * 2) / (1000 * 60 * 90); // one slow turn per ~90 min, idle ambiance only
-
-// --- camera (pan/zoom) --------------------------------------------------
-const camera = { x: 0, y: 0, scale: 1 };
-
-function resize() {
-  canvas.width = window.innerWidth * devicePixelRatio;
-  canvas.height = window.innerHeight * devicePixelRatio;
-  canvas.style.width = window.innerWidth + "px";
-  canvas.style.height = window.innerHeight + "px";
-}
-window.addEventListener("resize", resize);
-resize();
-
-function worldToScreen(x, y) {
-  return {
-    x: canvas.width / 2 + (x - camera.x) * camera.scale,
-    y: canvas.height / 2 + (y - camera.y) * camera.scale,
-  };
-}
-function screenToWorld(sx, sy) {
-  return {
-    x: camera.x + (sx - canvas.width / 2) / camera.scale,
-    y: camera.y + (sy - canvas.height / 2) / camera.scale,
-  };
-}
-
-canvas.addEventListener(
-  "wheel",
-  (e) => {
-    e.preventDefault();
-    const before = screenToWorld(e.clientX * devicePixelRatio, e.clientY * devicePixelRatio);
-    const factor = Math.pow(1.0015, -e.deltaY);
-    camera.scale = Math.min(4, Math.max(0.15, camera.scale * factor));
-    const after = screenToWorld(e.clientX * devicePixelRatio, e.clientY * devicePixelRatio);
-    camera.x += before.x - after.x;
-    camera.y += before.y - after.y;
-  },
-  { passive: false },
-);
-
-let dragging = false;
-let dragStart = null;
-canvas.addEventListener("pointerdown", (e) => {
-  dragging = true;
-  dragStart = { x: e.clientX, y: e.clientY, camX: camera.x, camY: camera.y, moved: false };
-});
-window.addEventListener("pointermove", (e) => {
-  if (!dragging || !dragStart) return;
-  const dx = (e.clientX - dragStart.x) * devicePixelRatio;
-  const dy = (e.clientY - dragStart.y) * devicePixelRatio;
-  if (Math.abs(dx) + Math.abs(dy) > 3) dragStart.moved = true;
-  camera.x = dragStart.camX - dx / camera.scale;
-  camera.y = dragStart.camY - dy / camera.scale;
-});
-window.addEventListener("pointerup", (e) => {
-  if (dragging && dragStart && !dragStart.moved) onCanvasClick(e);
-  dragging = false;
-  dragStart = null;
-});
-
-const STAR_HIT_RADIUS = 14;
-const EDGE_HIT_RADIUS = 8;
-
-function onCanvasClick(e) {
-  const sx = e.clientX * devicePixelRatio;
-  const sy = e.clientY * devicePixelRatio;
-
-  for (const star of state.stars) {
-    const p = positionFor(star.id);
-    const s = worldToScreen(p.x, p.y);
-    if (Math.hypot(s.x - sx, s.y - sy) <= STAR_HIT_RADIUS * camera.scale + 10) {
-      if (me && star.id !== me.id) openConnectModal(star);
-      return;
-    }
-  }
-
-  for (const edge of state.edges) {
-    const a = worldToScreen(...Object.values(positionFor(edge.starA)));
-    const b = worldToScreen(...Object.values(positionFor(edge.starB)));
-    const dist = pointToSegmentDistance(sx, sy, a.x, a.y, b.x, b.y);
-    if (dist <= EDGE_HIT_RADIUS * camera.scale + 6) {
-      openTimeline(edge);
-      return;
-    }
-  }
-}
-
-function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const lenSq = dx * dx + dy * dy;
-  let t = lenSq === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-  const cx = x1 + t * dx;
-  const cy = y1 + t * dy;
-  return Math.hypot(px - cx, py - cy);
-}
-
-// --- per-star visual variety ----------------------------------------------
-// Real stars aren't identical white dots — colour (temperature) and size
-// vary. Each person's star gets a stable look derived from its id, so it
-// never flickers between reloads, but the sky doesn't read as uniform.
+// Restrained, near-monochrome identity palette — explicitly not saturated
+// RGB. Each person's star gets a stable look derived from its id alone.
 const PERSON_COLORS = [
-  { fill: "#f4f3fa", glow: "232, 230, 240" }, // neutral white
-  { fill: "#cfe6ff", glow: "173, 216, 255" }, // blue-white
-  { fill: "#ffe3c2", glow: "255, 214, 170" }, // warm amber
+  { hex: 0xf4f3fa, glow: "244,243,250" }, // warm/neutral white
+  { hex: 0xf6e6bf, glow: "246,230,191" }, // pale gold
+  { hex: 0xd8e9ff, glow: "216,233,255" }, // cold white
+  { hex: 0xbdeef0, glow: "189,238,240" }, // faint cyan
+  { hex: 0xdccdf0, glow: "220,205,240" }, // faint lavender
 ];
 const styleCache = new Map();
 function styleFor(id) {
@@ -239,189 +84,490 @@ function styleFor(id) {
   const rand = mulberry32(hashString(id) ^ 0x51ed270b);
   const style = {
     color: PERSON_COLORS[Math.floor(rand() * PERSON_COLORS.length)],
-    sizeJitter: 0.8 + rand() * 0.6,
+    sizeJitter: 0.85 + rand() * 0.5,
     twinklePhase: rand() * Math.PI * 2,
-    twinkleSpeed: 0.4 + rand() * 0.5,
+    twinkleSpeed: 0.3 + rand() * 0.4,
   };
   styleCache.set(id, style);
   return style;
 }
 
-// --- rendering -----------------------------------------------------------
-function drawSky(t) {
-  const rotation = animate ? t * ROTATION_SPEED : 0;
-
-  // nebula + dust lane are additive glow, not flat alpha-over-black — "screen"/
-  // "lighter" is what actually makes a glow read as colour instead of a barely
-  // visible grey wash on a near-black canvas (plain source-over just darkens
-  // toward the background instead of lighting it up)
-  ctx.save();
-  ctx.globalCompositeOperation = "lighter";
-
-  const bandAngle = sky.band.angle + rotation * 0.1;
-  const bandLen = Math.max(canvas.width, canvas.height) * 1.4;
-  const bx = canvas.width / 2 - camera.x * 0.08 * camera.scale;
-  const by = canvas.height / 2 - camera.y * 0.08 * camera.scale;
-  ctx.save();
-  ctx.translate(bx, by);
-  ctx.rotate(bandAngle);
-  const bandGrad = ctx.createLinearGradient(0, -220, 0, 220);
-  bandGrad.addColorStop(0, "rgba(120, 110, 200, 0)");
-  bandGrad.addColorStop(0.5, "rgba(130, 120, 210, 0.035)");
-  bandGrad.addColorStop(1, "rgba(120, 110, 200, 0)");
-  ctx.fillStyle = bandGrad;
-  ctx.fillRect(-bandLen / 2, -220, bandLen, 440);
-  ctx.restore();
-
-  for (const nebula of sky.nebulae) {
-    const drift = animate ? Math.sin(t * 0.00005 * nebula.driftSpeed + nebula.driftPhase) * 60 : 0;
-    const angle = nebula.angle + rotation;
-    const wx = Math.cos(angle) * nebula.radius + drift;
-    const wy = Math.sin(angle) * nebula.radius;
-    const s = { x: canvas.width / 2 + (wx - camera.x * 0.15) * camera.scale, y: canvas.height / 2 + (wy - camera.y * 0.15) * camera.scale };
-    const size = nebula.size * camera.scale;
-    const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, size);
-    g.addColorStop(0, `rgba(${nebula.color}, ${nebula.alpha})`);
-    g.addColorStop(0.4, `rgba(${nebula.color}, ${nebula.alpha * 0.3})`);
-    g.addColorStop(1, `rgba(${nebula.color}, 0)`);
-    ctx.fillStyle = g;
-    ctx.fillRect(s.x - size, s.y - size, size * 2, size * 2);
-  }
-  ctx.restore();
-
-  sky.layers.forEach((layer, i) => {
-    const parallax = PARALLAX[i];
-    const bloom = i === 2; // nearest layer gets a soft point-glow, not just a flat dot
-    for (const star of layer) {
-      const angle = star.angle + rotation * (0.3 + i * 0.2);
-      const wx = Math.cos(angle) * star.radius;
-      const wy = Math.sin(angle) * star.radius;
-      const s = {
-        x: canvas.width / 2 + (wx - camera.x * parallax) * camera.scale,
-        y: canvas.height / 2 + (wy - camera.y * parallax) * camera.scale,
-      };
-      if (s.x < -20 || s.x > canvas.width + 20 || s.y < -20 || s.y > canvas.height + 20) continue;
-      const twinkle = animate ? 0.5 + 0.5 * Math.sin(t * 0.0012 * star.twinkleSpeed + star.twinklePhase) : 1;
-      const r = star.r * Math.min(1.3, camera.scale);
-      if (bloom) {
-        ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        const glow = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r * 5);
-        glow.addColorStop(0, `rgba(${star.color}, ${0.5 * star.baseAlpha * twinkle})`);
-        glow.addColorStop(1, `rgba(${star.color}, 0)`);
-        ctx.fillStyle = glow;
-        ctx.fillRect(s.x - r * 5, s.y - r * 5, r * 10, r * 10);
-        ctx.restore();
-      }
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${star.color}, ${star.baseAlpha * twinkle})`;
-      ctx.fill();
-    }
-  });
+// --- semi-physical layout ------------------------------------------------
+// A star's spot isn't fixed: it starts at a deterministic seed (so the first
+// frame is reproducible) and then *relaxes* under weak forces — unconnected
+// stars drift, connected pairs pull gently together, everything damps hard
+// so the motion stays slow. The social graph physically shapes the sky.
+function seedPosition(id) {
+  const rand = mulberry32(hashString(id));
+  const theta = rand() * Math.PI * 2;
+  const r = 140 + rand() * 480;
+  const z = (rand() - 0.5) * 320;
+  return { x: Math.cos(theta) * r, y: Math.sin(theta) * r, z };
 }
+const physics = new Map(); // id -> {x,y,z,vx,vy,vz}
+function physicsFor(id) {
+  let p = physics.get(id);
+  if (!p) {
+    const seed = seedPosition(id);
+    p = { x: seed.x, y: seed.y, z: seed.z, vx: 0, vy: 0, vz: 0 };
+    physics.set(id, p);
+  }
+  return p;
+}
+function stepPhysics(dt) {
+  const ids = state.stars.map((s) => s.id);
+  const pos = new Map(ids.map((id) => [id, physicsFor(id)]));
+  const force = new Map(ids.map((id) => [id, { x: 0, y: 0, z: 0 }]));
 
-function draw(t) {
-  const bg = ctx.createRadialGradient(
-    canvas.width / 2, canvas.height / 2, 0,
-    canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) * 0.75,
-  );
-  bg.addColorStop(0, "#0b0b18");
-  bg.addColorStop(1, "#040408");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  drawSky(t);
+  for (let i = 0; i < ids.length; i++) {
+    const a = pos.get(ids[i]);
+    for (let j = i + 1; j < ids.length; j++) {
+      const b = pos.get(ids[j]);
+      let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      let d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < 1) d2 = 1;
+      const d = Math.sqrt(d2);
+      const push = 2600 / d2;
+      const fx = (dx / d) * push, fy = (dy / d) * push, fz = (dz / d) * push;
+      force.get(ids[i]).x += fx; force.get(ids[i]).y += fy; force.get(ids[i]).z += fz;
+      force.get(ids[j]).x -= fx; force.get(ids[j]).y -= fy; force.get(ids[j]).z -= fz;
+    }
+    // gentle centering so the sky doesn't drift off to infinity
+    force.get(ids[i]).x -= a.x * 0.0012;
+    force.get(ids[i]).y -= a.y * 0.0012;
+    force.get(ids[i]).z -= a.z * 0.0012;
+  }
 
   for (const edge of state.edges) {
-    const a = worldToScreen(...Object.values(positionFor(edge.starA)));
-    const b = worldToScreen(...Object.values(positionFor(edge.starB)));
-    const pulse = animate ? 0.9 + 0.1 * Math.sin(t * 0.0015 + hashString(edge.id ?? edge.starA + edge.starB)) : 1;
-    const alpha = edge.brightness * (edge.mutual ? 0.85 : 0.45) * pulse;
-
-    if (edge.mutual) {
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.lineWidth = 7 * camera.scale;
-      ctx.strokeStyle = `rgba(154, 209, 255, ${alpha * 0.3})`;
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineWidth = (edge.mutual ? 1.4 : 1) * camera.scale;
-    ctx.strokeStyle = `rgba(154, 209, 255, ${alpha})`;
-    ctx.setLineDash(edge.mutual ? [] : [4 * camera.scale, 5 * camera.scale]);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-
-  for (const star of state.stars) {
-    const p = positionFor(star.id);
-    const s = worldToScreen(p.x, p.y);
-    const isMe = me && star.id === me.id;
-    const style = styleFor(star.id);
-    const twinkle = animate ? 0.85 + 0.15 * Math.sin(t * 0.0018 * style.twinkleSpeed + style.twinklePhase) : 1;
-    const r = (isMe ? 5 : 3.2 * style.sizeJitter) * Math.sqrt(camera.scale);
-
-    if (isMe && animate) {
-      const ringR = r * (3 + 0.6 * Math.sin(t * 0.0012));
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, ringR, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(255, 225, 150, 0.35)";
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
-    }
-
-    const glowColor = isMe ? "255, 225, 150" : style.color.glow;
-    ctx.save();
-    ctx.globalCompositeOperation = "lighter";
-    const glow = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, r * 8);
-    glow.addColorStop(0, `rgba(${glowColor}, ${0.75 * twinkle})`);
-    glow.addColorStop(0.35, `rgba(${glowColor}, ${0.28 * twinkle})`);
-    glow.addColorStop(1, `rgba(${glowColor}, 0)`);
-    ctx.fillStyle = glow;
-    ctx.fillRect(s.x - r * 8, s.y - r * 8, r * 16, r * 16);
-    ctx.restore();
-
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = isMe ? "#ffe196" : style.color.fill;
-    ctx.fill();
-
-    if (camera.scale > 0.5 || isMe) {
-      ctx.font = `${12 * Math.min(1.4, camera.scale)}px ui-sans-serif, system-ui`;
-      ctx.fillStyle = "rgba(232, 230, 240, 0.75)";
-      ctx.textAlign = "center";
-      ctx.fillText(star.pseudonym, s.x, s.y + r + 16);
-    }
+    const a = pos.get(edge.starA), b = pos.get(edge.starB);
+    if (!a || !b) continue;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const d = Math.max(1, Math.hypot(dx, dy, dz));
+    const rest = 230;
+    const strength = (edge.mutual ? 0.012 : 0.006) * (0.4 + edge.brightness * 0.6);
+    const pull = (d - rest) * strength;
+    const fx = (dx / d) * pull, fy = (dy / d) * pull, fz = (dz / d) * pull;
+    a.vx += fx; a.vy += fy; a.vz += fz;
+    b.vx -= fx; b.vy -= fy; b.vz -= fz;
   }
 
-  requestAnimationFrame(draw);
+  const damping = Math.pow(0.86, dt * 60);
+  for (const id of ids) {
+    const p = pos.get(id), f = force.get(id);
+    p.vx = (p.vx + f.x * dt) * damping;
+    p.vy = (p.vy + f.y * dt) * damping;
+    p.vz = (p.vz + f.z * dt) * damping;
+    const speed = Math.hypot(p.vx, p.vy, p.vz);
+    const maxSpeed = 14;
+    if (speed > maxSpeed) { p.vx *= maxSpeed / speed; p.vy *= maxSpeed / speed; p.vz *= maxSpeed / speed; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+  }
 }
-requestAnimationFrame(draw);
 
-// --- claim flow ------------------------------------------------------------
+// --- three.js scene --------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.setClearColor(0x05070b, 1);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 6000);
+
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+resize();
+
+// damped orbit camera: "weight", never 1:1 instant-follow
+const cam = {
+  theta: Math.PI * 0.25, phi: Math.PI * 0.38, radius: 900,
+  target: new THREE.Vector3(0, 0, 0),
+  desired: { theta: Math.PI * 0.25, phi: Math.PI * 0.38, radius: 900, target: new THREE.Vector3(0, 0, 0) },
+  ease: 0.07,
+};
+function applyCamera() {
+  const t = cam;
+  t.theta += (t.desired.theta - t.theta) * t.ease;
+  t.phi += (t.desired.phi - t.phi) * t.ease;
+  t.radius += (t.desired.radius - t.radius) * t.ease;
+  t.target.lerp(t.desired.target, t.ease);
+  const sinPhi = Math.sin(t.phi);
+  camera.position.set(
+    t.target.x + t.radius * sinPhi * Math.cos(t.theta),
+    t.target.y + t.radius * Math.cos(t.phi),
+    t.target.z + t.radius * sinPhi * Math.sin(t.theta),
+  );
+  camera.lookAt(t.target);
+}
+
+function projectToScreen(v3) {
+  const p = v3.clone().project(camera);
+  return {
+    x: (p.x * 0.5 + 0.5) * window.innerWidth,
+    y: (1 - (p.y * 0.5 + 0.5)) * window.innerHeight,
+    behind: p.z > 1,
+  };
+}
+
+// --- reusable glow textures ------------------------------------------------
+function makeRadialTexture(inner, outer) {
+  const size = 128;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, inner);
+  grad.addColorStop(1, outer);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+}
+const haloTexture = makeRadialTexture("rgba(255,255,255,1)", "rgba(255,255,255,0)");
+const coreTexture = makeRadialTexture("rgba(255,255,255,1)", "rgba(255,255,255,0.05)");
+const ringTexture = (() => {
+  const size = 128;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.strokeStyle = "rgba(255,255,255,1)";
+  g.lineWidth = 4;
+  g.beginPath();
+  g.arc(size / 2, size / 2, size / 2 - 6, 0, Math.PI * 2);
+  g.stroke();
+  return new THREE.CanvasTexture(c);
+})();
+
+function textSprite(text, color = "rgba(233,230,222,0.9)") {
+  const c = document.createElement("canvas");
+  const scale = 2;
+  c.width = 256 * scale; c.height = 64 * scale;
+  const g = c.getContext("2d");
+  g.font = `${22 * scale}px ui-sans-serif, system-ui, sans-serif`;
+  g.fillStyle = color;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillText(text, c.width / 2, c.height / 2);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(70, 17.5, 1);
+  return sprite;
+}
+
+// --- background dust + nebula wash (purely decorative, fixed seed) --------
+const SKY_SEED = 1337;
+(function buildDust() {
+  const rand = mulberry32(SKY_SEED);
+  const count = 3200;
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const base = new THREE.Color();
+  for (let i = 0; i < count; i++) {
+    const r = 500 + rand() * 2600;
+    const theta = rand() * Math.PI * 2;
+    const phi = Math.acos(2 * rand() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.cos(phi) * 0.6;
+    positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+    const warmth = rand();
+    base.setRGB(0.85 + warmth * 0.15, 0.85 + warmth * 0.1, 0.9 - warmth * 0.1);
+    base.toArray(colors, i * 3);
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const mat = new THREE.PointsMaterial({
+    size: 2.4, vertexColors: true, transparent: true, opacity: 0.55,
+    blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+  });
+  const dust = new THREE.Points(geom, mat);
+  scene.add(dust);
+
+  for (let i = 0; i < 2; i++) {
+    const r = 900 + rand() * 900;
+    const theta = rand() * Math.PI * 2;
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: haloTexture, color: 0x6a7bd6, transparent: true, opacity: 0.05,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    sprite.position.set(Math.cos(theta) * r, (rand() - 0.5) * 300, Math.sin(theta) * r);
+    sprite.scale.set(1800, 1800, 1);
+    scene.add(sprite);
+  }
+
+  window.__dust = dust;
+})();
+
+// --- star visuals ---------------------------------------------------------
+const starNodes = new Map(); // id -> {group, core, halo, ring, label, labelText, enteredAt}
+function nodeFor(star) {
+  let node = starNodes.get(star.id);
+  if (!node) {
+    const style = styleFor(star.id);
+    const group = new THREE.Group();
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: haloTexture, color: style.color.hex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const core = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: coreTexture, color: style.color.hex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const ring = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: ringTexture, color: 0x9ad1ff, transparent: true, opacity: 0,
+      depthWrite: false,
+    }));
+    group.add(halo, core, ring);
+    scene.add(group);
+    node = { group, core, halo, ring, label: null, labelText: null, enteredAt: performance.now(), scale: 0 };
+    starNodes.set(star.id, node);
+  }
+  return node;
+}
+
+// --- connection visuals ----------------------------------------------------
+// One declared event = one strand of light: a thin additive line along a
+// gently-bent curve between the two stars, fanned out per event so repeated
+// events visibly read as separate threads, plus a small travelling photon.
+const STRAND_SAMPLES = 18;
+const strands = new Map(); // "edgeId:i" -> {line, photon, color, speed, phase, seed}
+function strandFor(key, color) {
+  let s = strands.get(key);
+  if (!s) {
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(STRAND_SAMPLES * 3), 3));
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+    const line = new THREE.Line(geom, mat);
+    scene.add(line);
+    const photon = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: haloTexture, color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    photon.scale.set(10, 10, 1);
+    scene.add(photon);
+    s = { line, photon };
+    strands.set(key, s);
+  }
+  return s;
+}
+const liveStrandKeys = new Set();
+
+function quadBezier(a, m, b, t, out) {
+  const omt = 1 - t;
+  out.x = omt * omt * a.x + 2 * omt * t * m.x + t * t * b.x;
+  out.y = omt * omt * a.y + 2 * omt * t * m.y + t * t * b.y;
+  out.z = omt * omt * a.z + 2 * omt * t * m.z + t * t * b.z;
+  return out;
+}
+const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpM = new THREE.Vector3(), tmpP = new THREE.Vector3();
+
+function updateConnections(nowMs, drawEdges) {
+  liveStrandKeys.clear();
+  for (const edge of drawEdges) {
+    const pa = physicsFor(edge.starA), pb = physicsFor(edge.starB);
+    tmpA.set(pa.x, pa.y, pa.z);
+    tmpB.set(pb.x, pb.y, pb.z);
+    const ab = tmpB.clone().sub(tmpA);
+    const abLen = Math.max(1, ab.length());
+    const abNorm = ab.clone().divideScalar(abLen);
+    let u = new THREE.Vector3().crossVectors(abNorm, new THREE.Vector3(0, 1, 0));
+    if (u.lengthSq() < 1e-4) u = new THREE.Vector3().crossVectors(abNorm, new THREE.Vector3(1, 0, 0));
+    u.normalize();
+    const v = new THREE.Vector3().crossVectors(abNorm, u).normalize();
+
+    const events = edge.events ?? [];
+    const n = events.length;
+    events.forEach((ev, i) => {
+      const key = `${edge.id}:${i}`;
+      liveStrandKeys.add(key);
+      const seed = Math.abs(hashString(key));
+      const color = (styleFor(ev.declaredBy).color);
+      const strand = strandFor(key, color.hex);
+
+      const angle = (seed % 628) / 100;
+      const mag = 16 + (i % 6) * 10 + (n > 1 ? 14 : 0);
+      const offset = u.clone().multiplyScalar(Math.cos(angle) * mag).add(v.clone().multiplyScalar(Math.sin(angle) * mag));
+      tmpM.copy(tmpA).add(tmpB).multiplyScalar(0.5).add(offset);
+
+      const posAttr = strand.line.geometry.attributes.position;
+      for (let s = 0; s < STRAND_SAMPLES; s++) {
+        const t = s / (STRAND_SAMPLES - 1);
+        quadBezier(tmpA, tmpM, tmpB, t, tmpP);
+        posAttr.setXYZ(s, tmpP.x, tmpP.y, tmpP.z);
+      }
+      posAttr.needsUpdate = true;
+
+      // age-in: a brand new strand fades up rather than popping into place
+      if (strand.bornAt === undefined) strand.bornAt = nowMs;
+      const age = (nowMs - strand.bornAt) / 1000;
+      const fadeIn = Math.min(1, age / 1.4);
+      const pulse = animate ? 0.85 + 0.15 * Math.sin(nowMs * 0.002 + seed) : 1;
+      strand.line.material.opacity = ev.brightness * 0.55 * pulse * fadeIn;
+
+      if (animate) {
+        const speed = 0.00016 + (seed % 97) / 97 * 0.00018;
+        const phase = (seed % 1000) / 1000;
+        const frac = (nowMs * speed + phase) % 1;
+        quadBezier(tmpA, tmpM, tmpB, frac, tmpP);
+        strand.photon.position.copy(tmpP);
+        strand.photon.material.opacity = ev.brightness * 0.8 * fadeIn;
+      } else {
+        strand.photon.material.opacity = 0;
+      }
+    });
+  }
+  for (const [key, s] of strands) {
+    if (!liveStrandKeys.has(key)) {
+      s.line.material.opacity *= 0.85;
+      s.photon.material.opacity *= 0.85;
+      if (s.line.material.opacity < 0.01) {
+        scene.remove(s.line); scene.remove(s.photon);
+        strands.delete(key);
+      }
+    }
+  }
+}
+
+// --- gravity preview (connect-mode) ----------------------------------------
+const previewGeom = new THREE.BufferGeometry();
+previewGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+const previewLine = new THREE.Line(previewGeom, new THREE.LineDashedMaterial({
+  color: 0x9ad1ff, transparent: true, opacity: 0, dashSize: 8, gapSize: 6, blending: THREE.AdditiveBlending,
+}));
+previewLine.computeLineDistances();
+scene.add(previewLine);
+
+// --- transient "light travels from you to them" on your own new declare ----
+const travelSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: haloTexture, color: 0xffe196, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+}));
+travelSprite.scale.set(14, 14, 1);
+scene.add(travelSprite);
+let travel = null; // {from, to, start, duration}
+function beginTravel(fromId, toId) {
+  travel = { fromId, toId, start: performance.now(), duration: 900 };
+}
+
+// --- interaction state -------------------------------------------------
+let connectMode = false;
+let hoverStarId = null;
+let selectedTargetId = null;
+const STAR_HIT_PX = 18;
+const EDGE_HIT_PX = 7;
+
+function setHint() {
+  if (!me) { modeHint.textContent = ""; return; }
+  modeHint.textContent = connectMode
+    ? "move toward another star, then click to connect — click elsewhere to cancel"
+    : "click your star, then another, to connect";
+}
+
+canvas.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    const factor = Math.pow(1.0018, e.deltaY);
+    cam.desired.radius = Math.min(2600, Math.max(40, cam.desired.radius * factor));
+  },
+  { passive: false },
+);
+
+let dragging = false, dragStart = null;
+canvas.addEventListener("pointerdown", (e) => {
+  dragging = true;
+  dragStart = { x: e.clientX, y: e.clientY, theta: cam.desired.theta, phi: cam.desired.phi, moved: false };
+});
+window.addEventListener("pointermove", (e) => {
+  updateHover(e);
+  if (!dragging || !dragStart) return;
+  const dx = e.clientX - dragStart.x, dy = e.clientY - dragStart.y;
+  if (Math.abs(dx) + Math.abs(dy) > 3) dragStart.moved = true;
+  cam.desired.theta = dragStart.theta - dx * 0.004;
+  cam.desired.phi = Math.min(Math.PI - 0.15, Math.max(0.15, dragStart.phi - dy * 0.004));
+});
+window.addEventListener("pointerup", (e) => {
+  if (dragging && dragStart && !dragStart.moved) onCanvasClick(e);
+  dragging = false; dragStart = null;
+});
+
+function findStarAt(sx, sy) {
+  let best = null, bestDist = Infinity;
+  for (const star of state.stars) {
+    const p = physicsFor(star.id);
+    const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z));
+    if (s.behind) continue;
+    const d = Math.hypot(s.x - sx, s.y - sy);
+    if (d <= STAR_HIT_PX && d < bestDist) { bestDist = d; best = star; }
+  }
+  return best;
+}
+function findEdgeAt(sx, sy) {
+  for (const edge of state.edges) {
+    const pa = physicsFor(edge.starA), pb = physicsFor(edge.starB);
+    const a = projectToScreen(new THREE.Vector3(pa.x, pa.y, pa.z));
+    const b = projectToScreen(new THREE.Vector3(pb.x, pb.y, pb.z));
+    const d = pointToSegmentDistance(sx, sy, a.x, a.y, b.x, b.y);
+    if (d <= EDGE_HIT_PX) return edge;
+  }
+  return null;
+}
+function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  let t = lenSq === 0 ? 0 : ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function updateHover(e) {
+  if (historyMode) return;
+  const star = findStarAt(e.clientX, e.clientY);
+  hoverStarId = star ? star.id : null;
+}
+
+function onCanvasClick(e) {
+  if (historyMode) return;
+  const star = findStarAt(e.clientX, e.clientY);
+
+  if (star) {
+    if (me && star.id === me.id) {
+      connectMode = !connectMode;
+      setHint();
+      return;
+    }
+    if (connectMode && me) {
+      selectedTargetId = star.id;
+      openConnectPanel(star);
+      return;
+    }
+    return;
+  }
+
+  if (connectMode) { connectMode = false; setHint(); return; }
+
+  const edge = findEdgeAt(e.clientX, e.clientY);
+  if (edge) openTimeline(edge);
+}
+
+// --- claim / birth sequence --------------------------------------------
+let birthPending = false;
 async function refreshMe() {
   const res = await fetch("/api/me");
   const data = await res.json();
   me = data.star;
   if (me) {
-    claimScreen.classList.add("hidden");
+    birthScreen.classList.add("hidden");
     hud.classList.remove("hidden");
     meName.textContent = me.pseudonym;
+    setHint();
   } else {
-    claimScreen.classList.remove("hidden");
+    birthScreen.classList.remove("hidden");
     hud.classList.add("hidden");
   }
 }
 
-claimForm.addEventListener("submit", async (e) => {
+birthForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const pseudonym = document.getElementById("pseudonym").value;
   const res = await fetch("/api/claim", {
@@ -430,6 +576,8 @@ claimForm.addEventListener("submit", async (e) => {
     body: JSON.stringify({ pseudonym }),
   });
   if (res.ok) {
+    birthPending = true;
+    cam.radius = 6; cam.desired.radius = 6; cam.ease = 0.02;
     await refreshMe();
     await pollState();
   } else {
@@ -438,14 +586,16 @@ claimForm.addEventListener("submit", async (e) => {
   }
 });
 
-// --- connect modal -----------------------------------------------------
-function openConnectModal(star) {
-  selectedStarId = star.id;
+// --- connect panel -------------------------------------------------------
+function openConnectPanel(star) {
   connectTarget.textContent = star.pseudonym;
   connectNote.value = "";
-  connectModal.classList.remove("hidden");
+  connectPanel.classList.remove("hidden");
 }
-connectCancel.addEventListener("click", () => connectModal.classList.add("hidden"));
+connectCancel.addEventListener("click", () => {
+  connectPanel.classList.add("hidden");
+  connectMode = false; setHint();
+});
 connectForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const type = connectForm.querySelector("input[name=type]:checked").value;
@@ -453,19 +603,21 @@ connectForm.addEventListener("submit", async (e) => {
   await fetch("/api/connect", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ to: selectedStarId, type, note }),
+    body: JSON.stringify({ to: selectedTargetId, type, note }),
   });
-  connectModal.classList.add("hidden");
+  connectPanel.classList.add("hidden");
+  if (me && selectedTargetId) beginTravel(me.id, selectedTargetId);
+  connectMode = false; setHint();
   await pollState();
 });
 
-// --- rename ----------------------------------------------------------------
+// --- rename --------------------------------------------------------------
 renameBtn.addEventListener("click", () => {
   renameInput.value = me?.pseudonym ?? "";
-  renameModal.classList.remove("hidden");
+  renamePanel.classList.remove("hidden");
   renameInput.focus();
 });
-renameCancel.addEventListener("click", () => renameModal.classList.add("hidden"));
+renameCancel.addEventListener("click", () => renamePanel.classList.add("hidden"));
 renameForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const pseudonym = renameInput.value;
@@ -475,7 +627,9 @@ renameForm.addEventListener("submit", async (e) => {
     body: JSON.stringify({ pseudonym }),
   });
   if (res.ok) {
-    renameModal.classList.add("hidden");
+    renamePanel.classList.add("hidden");
+    const node = starNodes.get(me.id);
+    if (node) node.labelText = null; // force label texture rebuild
     await refreshMe();
   } else {
     const { error } = await res.json();
@@ -483,18 +637,14 @@ renameForm.addEventListener("submit", async (e) => {
   }
 });
 
-// --- timeline panel ------------------------------------------------------
+// --- timeline (kept public, per CLAUDE.md) --------------------------------
 const TYPE_LABEL = {
-  know: "said they know",
-  worked_together: "said they worked together",
-  met_today: "said they met up",
-  hung_out: "said they hung out",
+  know: "said they know", worked_together: "said they worked together",
+  met_today: "said they met up", hung_out: "said they hung out",
 };
-
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-
 async function openTimeline(edge) {
   const res = await fetch(`/api/edges/${edge.id}`);
   if (!res.ok) return;
@@ -514,11 +664,237 @@ async function openTimeline(edge) {
 }
 timelineClose.addEventListener("click", () => timelinePanel.classList.add("hidden"));
 
-// --- polling ---------------------------------------------------------------
+// --- history mode: reconstruct a past sky from the real event log ---------
+// No snapshot history is stored — this recomputes stars/edges exactly as
+// they were as of a chosen date, straight from created_at/occurred_on, the
+// same way the server computes "now". Positions reuse the live simulation
+// (we don't re-derive a historical layout), since the point is to show which
+// stars and connections existed and how bright they were, not literally
+// where they sat that day.
+function enterHistory() {
+  if (!state.stars.length) return;
+  historyMode = true;
+  connectMode = false; setHint();
+  historyBar.classList.remove("hidden");
+  historyBtn.classList.add("active");
+  const earliest = Math.min(...state.stars.map((s) => new Date(s.created_at).getTime()));
+  historySlider.dataset.earliest = String(earliest);
+  historySlider.value = "1000";
+  applyHistorySlider();
+}
+function exitHistory() {
+  historyMode = false;
+  historyAsOf = null;
+  historyBar.classList.add("hidden");
+  historyBtn.classList.remove("active");
+}
+function applyHistorySlider() {
+  const earliest = Number(historySlider.dataset.earliest || Date.now());
+  const now = Date.now();
+  const frac = Number(historySlider.value) / 1000;
+  historyAsOf = new Date(earliest + frac * (now - earliest));
+  historyDate.textContent = historyAsOf.toISOString().slice(0, 10);
+}
+historyBtn.addEventListener("click", () => (historyMode ? exitHistory() : enterHistory()));
+historyClose.addEventListener("click", exitHistory);
+historySlider.addEventListener("input", applyHistorySlider);
+
+function historicalState() {
+  const asOf = historyAsOf.getTime();
+  const stars = state.stars.filter((s) => new Date(s.created_at).getTime() <= asOf);
+  const starIds = new Set(stars.map((s) => s.id));
+  const edges = [];
+  for (const edge of state.edges) {
+    if (!starIds.has(edge.starA) || !starIds.has(edge.starB)) continue;
+    const events = (edge.events ?? []).filter((ev) => new Date(ev.occurredOn).getTime() <= asOf);
+    if (events.length === 0) continue;
+    const recomputed = events.map((ev) => {
+      const ageDays = Math.max(0, (asOf - new Date(ev.occurredOn).getTime()) / 86_400_000);
+      const recency = Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
+      return { ...ev, brightness: Math.max(0.12, Math.min(1, recency)) };
+    });
+    const mostRecent = Math.max(...recomputed.map((e) => new Date(e.occurredOn).getTime()));
+    const ageDays = Math.max(0, (asOf - mostRecent) / 86_400_000);
+    const recency = Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
+    const frequency = Math.min(1, recomputed.length / 8);
+    edges.push({ ...edge, events: recomputed, brightness: Math.max(0.08, Math.min(1, recency * 0.75 + frequency * 0.25)) });
+  }
+  return { stars, edges };
+}
+
+// --- poll-diff "real-time as spectacle" ------------------------------------
+let knownStarIds = null;
+let knownEventCounts = null;
+const spectacleLabels = []; // {sprite, until}
+function noteSpectacle(stars, edges) {
+  if (knownStarIds) {
+    for (const s of stars) {
+      if (!knownStarIds.has(s.id) && !(me && s.id === me.id)) spawnSpectacleLabel(s.id, `${s.pseudonym} joined the sky`);
+    }
+  }
+  if (knownEventCounts) {
+    for (const e of edges) {
+      const prev = knownEventCounts.get(e.id) ?? 0;
+      if (e.eventCount > prev && prev > 0) {
+        const strand = strands.get(`${e.id}:${e.eventCount - 1}`);
+        if (strand) strand.bornAt = undefined; // replay the fade-in for the newest strand
+      }
+    }
+  }
+  knownStarIds = new Set(stars.map((s) => s.id));
+  knownEventCounts = new Map(edges.map((e) => [e.id, e.eventCount]));
+}
+function spawnSpectacleLabel(starId, text) {
+  const sprite = textSprite(text, "rgba(255,225,150,0.95)");
+  const p = physicsFor(starId);
+  sprite.position.set(p.x, p.y + 26, p.z);
+  scene.add(sprite);
+  spectacleLabels.push({ sprite, starId, until: performance.now() + 3000 });
+}
+
+// --- polling (also doubles as this browser's own heartbeat) ----------------
 async function pollState() {
-  const res = await fetch("/api/state");
-  state = await res.json();
+  const [stateRes, meRes] = await Promise.all([fetch("/api/state"), fetch("/api/me")]);
+  const next = await stateRes.json();
+  noteSpectacle(next.stars, next.edges);
+  state = next;
+  const meData = await meRes.json();
+  if (meData.star) me = meData.star;
+  if (!hudStats.hidden) {
+    hudStats.textContent = `${state.stars.length} stars · ${state.edges.length} connections`;
+  }
 }
 pollState();
 setInterval(pollState, 4000);
 refreshMe();
+
+// --- main loop ---------------------------------------------------------
+let lastT = performance.now();
+function frame(nowMs) {
+  const dt = Math.min(0.05, (nowMs - lastT) / 1000);
+  lastT = nowMs;
+
+  if (animate && !historyMode) stepPhysics(dt);
+  if (window.__dust && animate) window.__dust.rotation.y += dt * 0.004;
+
+  const drawState = historyMode && historyAsOf ? historicalState() : state;
+
+  // birth reveal: once our own star exists, pull the camera back slowly
+  if (birthPending && me && starNodes.has(me.id)) {
+    birthPending = false;
+    setTimeout(() => { cam.desired.radius = 900; cam.ease = 0.015; setTimeout(() => (cam.ease = 0.07), 4500); }, 1400);
+  }
+
+  for (const star of drawState.stars) {
+    const node = nodeFor(star);
+    const p = physicsFor(star.id);
+    node.group.position.set(p.x, p.y, p.z);
+
+    const isMe = me && star.id === me.id;
+    const style = styleFor(star.id);
+    const lastSeen = new Date(star.last_seen_at).getTime();
+    const idleMs = Date.now() - lastSeen;
+    const status = idleMs < 15_000 ? "online" : idleMs < 10 * 60_000 ? "recent" : "dim";
+
+    const age = (nowMs - node.enteredAt) / 1000;
+    const entrance = Math.min(1, age / 1.6);
+    node.scale += (entrance - node.scale) * 0.08;
+
+    const twinkle = animate && status === "online"
+      ? 0.75 + 0.25 * Math.sin(nowMs * 0.0012 * style.twinkleSpeed + style.twinklePhase)
+      : 1;
+    const baseR = (isMe ? 7 : 4.6 * style.sizeJitter) * node.scale;
+    node.core.scale.set(baseR, baseR, 1);
+    node.core.material.opacity = (status === "dim" ? 0.35 : 0.95) * node.scale;
+
+    const haloR = baseR * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 2.4);
+    node.halo.scale.set(haloR, haloR, 1);
+    const haloAlpha = status === "online" ? 0.55 * twinkle : status === "recent" ? 0.3 : 0.08;
+    node.halo.material.opacity = haloAlpha * node.scale;
+
+    node.ring.material.opacity = isMe && connectMode ? 0.5 + 0.3 * Math.sin(nowMs * 0.006) : 0;
+    const ringR = baseR * 2.6;
+    node.ring.scale.set(ringR, ringR, 1);
+
+    const dist = camera.position.distanceTo(node.group.position);
+    const showLabel = (isMe || dist < 650 || hoverStarId === star.id) && status !== "dim" || hoverStarId === star.id;
+    if (showLabel) {
+      if (node.labelText !== star.pseudonym) {
+        if (node.label) { node.group.remove(node.label); }
+        node.label = textSprite(star.pseudonym);
+        node.label.position.set(0, baseR + 14, 0);
+        node.group.add(node.label);
+        node.labelText = star.pseudonym;
+      }
+      node.label.material.opacity = 0.8 * node.scale;
+    } else if (node.label) {
+      node.label.material.opacity = 0;
+    }
+  }
+
+  updateConnections(nowMs, drawState.edges);
+
+  // gravity preview while in connect-mode and hovering someone else
+  if (connectMode && me && hoverStarId && hoverStarId !== me.id) {
+    const a = physicsFor(me.id), b = physicsFor(hoverStarId);
+    previewGeom.attributes.position.setXYZ(0, a.x, a.y, a.z);
+    previewGeom.attributes.position.setXYZ(1, b.x, b.y, b.z);
+    previewGeom.attributes.position.needsUpdate = true;
+    previewLine.computeLineDistances();
+    previewLine.material.opacity = 0.5 + 0.2 * Math.sin(nowMs * 0.006);
+  } else {
+    previewLine.material.opacity = 0;
+  }
+
+  // travelling light from you to a just-declared connection
+  if (travel) {
+    const t = Math.min(1, (nowMs - travel.start) / travel.duration);
+    const a = physicsFor(travel.fromId), b = physicsFor(travel.toId);
+    travelSprite.position.lerpVectors(new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z), t);
+    travelSprite.material.opacity = Math.sin(Math.PI * t) * 0.9;
+    if (t >= 1) travel = null;
+  } else {
+    travelSprite.material.opacity = 0;
+  }
+
+  for (let i = spectacleLabels.length - 1; i >= 0; i--) {
+    const sl = spectacleLabels[i];
+    const p = physicsFor(sl.starId);
+    sl.sprite.position.set(p.x, p.y + 26, p.z);
+    const remain = sl.until - nowMs;
+    sl.sprite.material.opacity = Math.max(0, Math.min(1, remain / 600));
+    if (remain <= 0) { scene.remove(sl.sprite); spectacleLabels.splice(i, 1); }
+  }
+
+  // gravity of attention: the whole view eases a little toward whoever you hover
+  if (!historyMode && hoverStarId) {
+    const p = physicsFor(hoverStarId);
+    cam.desired.target.set(p.x * 0.3, p.y * 0.3, p.z * 0.3);
+  } else if (!historyMode) {
+    cam.desired.target.set(0, 0, 0);
+  }
+
+  if (hoverStarId && !historyMode) {
+    const star = state.stars.find((s) => s.id === hoverStarId);
+    if (star) {
+      const p = physicsFor(star.id);
+      const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z));
+      const joinedDays = Math.floor((Date.now() - new Date(star.created_at).getTime()) / 86_400_000);
+      const seenDays = Math.floor((Date.now() - new Date(star.last_seen_at).getTime()) / 86_400_000);
+      const conns = state.edges.filter((e) => e.starA === star.id || e.starB === star.id).length;
+      hoverLabel.style.left = `${s.x + 18}px`;
+      hoverLabel.style.top = `${s.y - 10}px`;
+      hoverLabel.innerHTML = `<span class="label-name">${escapeHtml(star.pseudonym)}</span>` +
+        `<span class="label-meta">joined ${joinedDays <= 0 ? "today" : joinedDays + "d ago"} · ${conns} connection${conns === 1 ? "" : "s"}</span>` +
+        (seenDays >= 1 ? `<span class="label-meta">last seen ${seenDays}d ago</span>` : "");
+      hoverLabel.classList.remove("hidden");
+    }
+  } else {
+    hoverLabel.classList.add("hidden");
+  }
+
+  applyCamera();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);

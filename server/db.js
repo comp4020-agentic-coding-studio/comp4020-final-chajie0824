@@ -101,22 +101,36 @@ export function declareConnection(fromStarId, toStarId, type, occurredOn, note) 
 const HALF_LIFE_DAYS = 21;
 
 export function getState() {
-  const stars = db.prepare("SELECT id, pseudonym, last_seen_at FROM stars").all();
+  const stars = db.prepare("SELECT id, pseudonym, created_at, last_seen_at FROM stars").all();
 
   const edges = db.prepare("SELECT * FROM edges").all().map((edge) => {
-    const events = db
+    const rows = db
       .prepare("SELECT declared_by, type, occurred_on FROM edge_events WHERE edge_id = ? ORDER BY occurred_on")
       .all(edge.id);
-    if (events.length === 0) return null;
+    if (rows.length === 0) return null;
 
-    const declaredBy = new Set(events.map((e) => e.declared_by));
+    const declaredBy = new Set(rows.map((e) => e.declared_by));
     const mutual = declaredBy.has(edge.star_a) && declaredBy.has(edge.star_b);
 
     const now = Date.now();
-    const mostRecent = Math.max(...events.map((e) => new Date(e.occurred_on).getTime()));
+    // Every event gets its own decayed brightness — the client draws one line
+    // per event, not one aggregated line per edge, so "we hung out five times"
+    // visibly looks like five strands of light, not a number nobody sees.
+    const events = rows.map((e) => {
+      const ageDays = Math.max(0, (now - new Date(e.occurred_on).getTime()) / 86_400_000);
+      const recency = Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
+      return {
+        declaredBy: e.declared_by,
+        type: e.type,
+        occurredOn: e.occurred_on,
+        brightness: Math.max(0.12, Math.min(1, recency)),
+      };
+    });
+
+    const mostRecent = Math.max(...rows.map((e) => new Date(e.occurred_on).getTime()));
     const ageDays = Math.max(0, (now - mostRecent) / 86_400_000);
     const recency = Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
-    const frequency = Math.min(1, events.length / 8);
+    const frequency = Math.min(1, rows.length / 8);
     const brightness = Math.max(0.08, Math.min(1, recency * 0.75 + frequency * 0.25));
 
     return {
@@ -125,7 +139,8 @@ export function getState() {
       starB: edge.star_b,
       mutual,
       brightness,
-      eventCount: events.length,
+      eventCount: rows.length,
+      events,
     };
   }).filter(Boolean);
 
