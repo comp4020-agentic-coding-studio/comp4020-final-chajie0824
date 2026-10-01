@@ -199,11 +199,25 @@ renderer.setClearColor(0x05070b, 1);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 6000);
+// A second camera, never rendered, kept at the same orbit (theta/phi/radius)
+// as `camera` but always looking at the true origin instead of `cam.target`.
+// Hover hit-testing (see findStarAt's `stable` option) projects against this
+// one instead of the live camera, specifically to break a feedback loop:
+// gravity-of-attention (below) eases the live camera's target toward
+// whoever's hovered, which shifts that star's own screen position, which
+// could flip the hover hit-test, which changes the target again... a visible
+// jitter loop the instant someone's cursor tried to track the drift. Hit
+// -testing against a camera that never moves for that reason has no such
+// loop. Clicks still use the live camera, so click precision matches what's
+// actually on screen.
+const hitCamera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 6000);
 
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  hitCamera.aspect = window.innerWidth / window.innerHeight;
+  hitCamera.updateProjectionMatrix();
 }
 window.addEventListener("resize", resize);
 resize();
@@ -228,10 +242,17 @@ function applyCamera() {
     t.target.z + t.radius * sinPhi * Math.sin(t.theta),
   );
   camera.lookAt(t.target);
+  hitCamera.position.set(
+    t.radius * sinPhi * Math.cos(t.theta),
+    t.radius * Math.cos(t.phi),
+    t.radius * sinPhi * Math.sin(t.theta),
+  );
+  hitCamera.lookAt(0, 0, 0);
+  hitCamera.updateMatrixWorld();
 }
 
-function projectToScreen(v3) {
-  const p = v3.clone().project(camera);
+function projectToScreen(v3, viewCamera = camera) {
+  const p = v3.clone().project(viewCamera);
   return {
     x: (p.x * 0.5 + 0.5) * window.innerWidth,
     y: (1 - (p.y * 0.5 + 0.5)) * window.innerHeight,
@@ -566,27 +587,27 @@ window.addEventListener("pointerup", (e) => {
   dragging = false; dragStart = null;
 });
 
-// `stickyId`, when given a larger hit radius for that one star, gives hover
-// detection hysteresis: gravity-of-attention (below) eases the camera toward
-// whoever's hovered, which nudges that star's own screen position a little —
-// without slack here, that nudge can carry the cursor just past the plain
-// hit radius, dropping hover, re-centering the camera, landing the cursor
-// back inside, re-triggering hover... a visible jitter loop as soon as
-// someone tries to track a star with the mouse. Click hit-testing passes no
-// stickyId, so it's unaffected — this only steadies hover.
-function findStarAt(sx, sy, stickyId) {
+// `stable: true` projects against `hitCamera` (never moved by
+// gravity-of-attention) instead of the live camera — that's the actual fix
+// for hover jitter; see hitCamera's own comment above. `stickyId` additionally
+// widens the hit radius for whichever star is already hovered, as a second
+// line of defence against the sky's own slow physics drift (CLAUDE.md) still
+// nudging a star just past the hit radius between frames. Clicks pass neither
+// option, so they stay pixel-accurate against what's actually rendered.
+function findStarAt(sx, sy, { stickyId, stable } = {}) {
+  const viewCamera = stable ? hitCamera : camera;
   if (stickyId) {
     const star = state.stars.find((s) => s.id === stickyId);
     if (star) {
       const p = physicsFor(star.id);
-      const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z));
+      const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z), viewCamera);
       if (!s.behind && Math.hypot(s.x - sx, s.y - sy) <= STAR_HIT_PX * 1.8) return star;
     }
   }
   let best = null, bestDist = Infinity;
   for (const star of state.stars) {
     const p = physicsFor(star.id);
-    const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z));
+    const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z), viewCamera);
     if (s.behind) continue;
     const d = Math.hypot(s.x - sx, s.y - sy);
     if (d <= STAR_HIT_PX && d < bestDist) { bestDist = d; best = star; }
@@ -614,7 +635,7 @@ function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
 let hoverSince = 0;
 function updateHover(e) {
   if (historyMode || storyMode) return;
-  const star = findStarAt(e.clientX, e.clientY, hoverStarId);
+  const star = findStarAt(e.clientX, e.clientY, { stickyId: hoverStarId, stable: true });
   const id = star ? star.id : null;
   if (id !== hoverStarId) hoverSince = performance.now();
   hoverStarId = id;

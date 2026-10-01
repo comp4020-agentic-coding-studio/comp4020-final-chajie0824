@@ -106,16 +106,22 @@ connections, brightness comes from a log of events on that edge. See
   star just stays in the sky, now un-owned by any browser, and the birth
   screen reappears for a brand new one.
 
-- **Hover hit-testing uses a wider "sticky" radius for whoever's already
-  hovered (`findStarAt`'s `stickyId` param), not the same plain radius used
-  for clicks.** Gravity-of-attention (above) eases the camera toward the
-  hovered star, which nudges that star's own screen position a little; at
-  the plain hit radius that nudge could carry the cursor just outside it,
-  dropping hover, re-centering the camera, landing the cursor back inside,
-  re-triggering hover — a visible jitter loop the instant someone tried to
-  track a star with the mouse. The wider sticky radius only applies to
-  *keeping* an existing hover, never to clicks or to acquiring a new one, so
-  it doesn't make clicking less precise.
+- **Hover hit-testing projects against `hitCamera`, a second never-rendered
+  camera kept at the same orbit as the live one but always looking at the
+  true origin, instead of the live camera `cam.desired.target` actually
+  moves.** Gravity-of-attention (above) eases the live camera toward whoever
+  you hover, which nudges that star's own screen position a little; hit
+  -testing against that same moving camera made this circular — the nudge
+  could carry the cursor just outside the hit radius, dropping hover,
+  re-centering the camera back, landing the cursor back inside, re
+  -triggering hover, forever, the instant someone's mouse drifted along with
+  the star. Projecting hover against a camera gravity never touches breaks
+  the loop at the source rather than papering over it with tolerance.
+  `findStarAt` also still takes a `stickyId` for a wider hit radius on
+  whichever star is already hovered, as a second line of defence against the
+  sky's own slow physics drift (below) doing the same thing on a longer
+  timescale. Clicks pass neither option, so they stay pixel-accurate against
+  what's actually rendered, gravity pan included.
 
 ## Stack, briefly
 
