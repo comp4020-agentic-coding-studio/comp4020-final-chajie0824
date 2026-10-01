@@ -44,15 +44,11 @@ connections, brightness comes from a log of events on that edge. See
   must never make clicking imprecise — if a future change makes stars drift
   fast enough that clicks miss, that's a bug in the damping, not an
   acceptable tradeoff.
-- **The "speed" control scales idle motion only (physics drift, twinkle,
-  connection shimmer/photon), via a separate virtual `animClock` the frame
-  loop advances by `realDt * speedMultiplier` — it never touches wall-clock
-  time.** This is deliberately a different axis from History (which scrubs
-  through *past* declared events at their real recorded dates): speed is
-  "how fast does the living sky breathe right now", History is "what did the
-  sky look like on some earlier date". Keep them orthogonal — don't let
-  `speedMultiplier` leak into brightness/recency math or the history
-  timeline, and don't let History scrubbing touch `animClock`.
+- **There is no speed control — removed on purpose.** It once scaled idle
+  motion, but History already answers "watch the sky change", and two
+  time-ish controls side by side read as redundant. Idle motion runs on
+  `animClock` (real dt, clamped); don't let History scrubbing touch it, and
+  don't reintroduce a speed multiplier without asking.
 - **`/readme/` must keep carrying every heading in `README.md`, in order.**
   `spec/invariants.test.ts` checks this and is not to be edited — if a README
   rewrite breaks it, fix the README's headings or the renderer, not the spec.
@@ -77,11 +73,16 @@ connections, brightness comes from a log of events on that edge. See
   `Shift+A` shortcut + a key typed once into `localStorage`, not surfaced in
   the normal UI.
 
-- **Story Mode is a deliberately pragmatic cut of the design doc's full
-  scrollytelling tour, not the whole thing.** It's opt-in via a `story`
-  button next to `history` — never auto-played on first visit, since that
-  would collide with someone's actual birth sequence and detecting "first
-  visit" cleanly isn't worth the bookkeeping for this. It's mutually
+- **Story Mode follows the design doc's six-beat guided journey** (you
+  entered → you are not alone → connections shape the sky → old light
+  remains → the sky remembers → nothing here is fixed). Copy sits fixed on
+  the right, numbered, faded in by progress so each line arrives *with* the
+  camera, not scrolled past it. Beats 01–02 always centre on your own star;
+  the travel beat uses your connection if you have one, else any. It plays
+  **once automatically right after a first-ever birth** (`storySeen` in
+  localStorage) — this replaced an earlier "never auto-play" call, because
+  starting it *after* the birth sequence ends avoids the collision that
+  call worried about; otherwise it's opt-in via the `story` button. It's mutually
   exclusive with History (entering one exits the other), both being single
   "alternate mode" overlays on top of Explore. **The Story camera is one
   continuous function of (smoothed) scroll progress, `storyPose(p)`,
@@ -93,13 +94,40 @@ connections, brightness comes from a log of events on that edge. See
   hand-off — the flight put the camera *inside* the star it started from.
   Don't reintroduce separate per-beat camera systems or `scroll-snap`; keep
   every keyframe boundary continuous by construction, and keep the final
-  keyframe equal to Explore's default pose so leaving Story never snaps. The
-  memory stretch drives `historyMode`/`historicalState()` from progress —
+  keyframe equal to Explore's default pose so leaving Story never snaps.
+  `lerpPose` "hops" (pulls back by a `sin(πt)` bump, zero at both ends) when
+  two targets are far apart for the radius, so a transition never pans
+  across empty space with neither star in frame. The memory stretch drives
+  `historyMode`/`historicalState()` from progress —
   rewinding to the empty pre-history sky, then replaying forward to today —
   same reconstruction and decay math as the History slider.
-  Explore itself does **not** get this same click-a-connection-to-fly-along
-  behaviour outside Story — that's a natural follow-up once the curve-flight
-  code exists, not something "build Story Mode" required.
+
+- **Explore clicks: a star focuses, a connection travels, empty sky lets
+  go.** Clicking someone else's star sets `focusStarId` (camera target
+  locks on, radius ≤ 360) until empty sky or Esc. Clicking a connection
+  flies the camera along its curve (`flyAlongEdge`/`stepFlight`, starting
+  from the focused end, else the end nearer the click), then focuses the far
+  star and opens the timeline — the timeline is reached *through* travel,
+  not instead of it. Your own star still toggles connect mode.
+
+- **Gravity of attention has three parts**: the camera leans toward the
+  hovered star, everyone unrelated dims (`node.attn` → 0.4) while the
+  focused star's own connections brighten, and its neighbours' names
+  surface one by one (~180ms apart). All of it eases; nothing pops. The
+  floating label reads like the design doc ("NAME / joined 14 Sep / N
+  connections / last seen … / ← connected to you N days ago").
+
+- **A star's identity is a fingerprint, never an avatar**: colour
+  temperature, size, halo size, pulse rate, a faint four-point diffraction
+  spike (angle/length) and 0–4 orbiting motes, all derived from its id.
+  Status transitions (online → recent → dim) ease over a couple of seconds.
+  "Currently active" = declared something in the last 10 minutes
+  (`declaredAt` on events, from `edge_events.created_at`) and shows as an
+  occasional flare of the spike — no badges, no "ONLINE" text.
+
+- **A new connection is born as light first, line second**: the travelling
+  light arcs from declarer to recipient with a dotted trail, and the new
+  strand is held at zero (`travelInFlight`) until it arrives, then fades in.
 
 - **"Forget this star" (`POST /api/forget`, the &#8634; button next to rename)
   only unlinks the browser's cookie — it never deletes the star or any of its
@@ -151,7 +179,8 @@ connections, brightness comes from a log of events on that edge. See
   of history after its date (`historyEdgeRampMs`), so even a star whose
   birthday equals its first connection reads as "star, then link". Star
   nodes absent from the historical sky actively fade out — the frame loop
-  used to just skip them, which left them frozen at full brightness.
+  used to just skip them, which left them frozen at full brightness. Dates
+  read "01 SEP 2026", with the slider's start date and "NOW" under its ends.
 
 - **Other viewers see a travelling light for every new declaration**, not
   just the declarer: the poll diff (`noteSpectacle`) fires `beginTravel`

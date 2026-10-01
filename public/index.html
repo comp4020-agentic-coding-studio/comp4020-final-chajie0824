@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Constellation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=IBM+Plex+Mono:wght@400;500&display=swap" />
     <link rel="stylesheet" href="/style.css" />
     <script type="importmap">
       { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" } }
@@ -31,7 +34,6 @@
         <span class="hint" id="mode-hint">click your star, then another, to connect</span>
         <div class="hud-controls">
           <label class="toggle"><input type="checkbox" id="animate-checkbox" checked /><span>animate</span></label>
-          <button id="speed-btn" type="button" class="ghost-btn" title="idle motion speed: drift, twinkle, connection shimmer">speed 1×</button>
           <button id="story-btn" type="button" class="ghost-btn">story</button>
           <button id="history-btn" type="button" class="ghost-btn">history</button>
         </div>
@@ -82,25 +84,27 @@
         <button id="history-close" type="button">&times; back to now</button>
       </div>
       <input id="history-slider" type="range" min="0" max="1000" value="1000" step="1" />
+      <div class="history-range"><span id="history-start"></span><span id="history-end"></span></div>
     </div>
 
     <div id="story-scroll" class="hidden">
-      <section class="story-section" data-beat="intro">
-        <p>A sky made by the people who shaped it.</p>
-      </section>
-      <section class="story-section" data-beat="birth">
-        <p>Every person begins as a single point of light.</p>
-      </section>
-      <section class="story-section" data-beat="travel">
-        <p>Watch a connection form between two people.</p>
-      </section>
-      <section class="story-section" data-beat="memory">
-        <p>The sky remembers who it was.</p>
-      </section>
-      <section class="story-section" data-beat="exit">
-        <p>Nothing here is fixed. Go find your own place in it.</p>
-        <button id="story-enter-btn" type="button">Enter the sky</button>
-      </section>
+      <!-- empty spacers give the scroll its length; the copy below is fixed
+           in place and faded in by scroll progress, so text arrives with the camera -->
+      <section class="story-section"></section>
+      <section class="story-section"></section>
+      <section class="story-section"></section>
+      <section class="story-section"></section>
+      <section class="story-section"></section>
+      <section class="story-section"></section>
+      <div id="story-copy">
+        <div class="story-beat"><span class="story-num">01</span><h2>You entered the sky</h2><p>Every person begins as a single point of light.</p></div>
+        <div class="story-beat"><span class="story-num">02</span><h2>You are not alone</h2><p>Each light here is someone who came before you.</p></div>
+        <div class="story-beat"><span class="story-num">03</span><h2>Connections shape the sky</h2><p>Nobody draws the constellation. It emerges from who connects to whom.</p></div>
+        <div class="story-beat"><span class="story-num">04</span><h2>Old light remains</h2><p id="story-old-line">Some lights go quiet. Their connections remain.</p></div>
+        <div class="story-beat"><span class="story-num">05</span><h2>The sky remembers</h2><p>Before anyone arrived, there was only dark. Watch it fill again.</p></div>
+        <div class="story-beat"><span class="story-num">06</span><h2>Nothing here is fixed</h2><p>Go find your own place in it.</p><button id="story-enter-btn" type="button">Enter the sky</button></div>
+      </div>
+      <p id="story-scroll-hint">scroll</p>
     </div>
 
     <a id="readme-link" href="/readme/">about this constellation</a>

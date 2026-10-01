@@ -109,7 +109,7 @@ export function getState() {
 
   const edges = db.prepare("SELECT * FROM edges").all().map((edge) => {
     const rows = db
-      .prepare("SELECT declared_by, type, occurred_on FROM edge_events WHERE edge_id = ? ORDER BY occurred_on")
+      .prepare("SELECT declared_by, type, occurred_on, created_at FROM edge_events WHERE edge_id = ? ORDER BY occurred_on, created_at")
       .all(edge.id);
     if (rows.length === 0) return null;
 
@@ -127,6 +127,9 @@ export function getState() {
         declaredBy: e.declared_by,
         type: e.type,
         occurredOn: e.occurred_on,
+        // when it was declared (vs. when it happened) — lets the client tell
+        // who's "currently active" for the flare, and which event is newest
+        declaredAt: e.created_at,
         brightness: Math.max(0.12, Math.min(1, recency)),
       };
     });

@@ -35,12 +35,13 @@ const timelineTitle = document.getElementById("timeline-title");
 const timelineList = document.getElementById("timeline-list");
 const timelineClose = document.getElementById("timeline-close");
 const animateCheckbox = document.getElementById("animate-checkbox");
-const speedBtn = document.getElementById("speed-btn");
 const historyBtn = document.getElementById("history-btn");
 const historyBar = document.getElementById("history-bar");
 const historySlider = document.getElementById("history-slider");
 const historyDate = document.getElementById("history-date");
 const historyClose = document.getElementById("history-close");
+const historyStartLabel = document.getElementById("history-start");
+const historyEndLabel = document.getElementById("history-end");
 const storyBtn = document.getElementById("story-btn");
 const storyScroll = document.getElementById("story-scroll");
 const storyEnterBtn = document.getElementById("story-enter-btn");
@@ -61,24 +62,6 @@ animateCheckbox.checked = animate;
 animateCheckbox.addEventListener("change", () => {
   animate = animateCheckbox.checked;
   try { localStorage.setItem("constellation:animate", animate ? "1" : "0"); } catch {}
-});
-
-// Speed control: how fast *idle* motion runs (physics drift, twinkle,
-// connection shimmer) — a separate axis from History (which scrubs through
-// *past* declared events, not live animation rate). Like `animate`, this is
-// a pure viewer preference, localStorage-persisted, never gating a feature.
-const SPEEDS = [0.5, 1, 2, 4];
-let speedMultiplier = 1;
-try {
-  const saved = Number(localStorage.getItem("constellation:speed"));
-  if (SPEEDS.includes(saved)) speedMultiplier = saved;
-} catch {}
-function setSpeedLabel() { speedBtn.textContent = `speed ${speedMultiplier}×`; }
-setSpeedLabel();
-speedBtn.addEventListener("click", () => {
-  speedMultiplier = SPEEDS[(SPEEDS.indexOf(speedMultiplier) + 1) % SPEEDS.length];
-  setSpeedLabel();
-  try { localStorage.setItem("constellation:speed", String(speedMultiplier)); } catch {}
 });
 
 // --- deterministic seeds -----------------------------------------------
@@ -110,11 +93,19 @@ const styleCache = new Map();
 function styleFor(id) {
   if (styleCache.has(id)) return styleCache.get(id);
   const rand = mulberry32(hashString(id) ^ 0x51ed270b);
+  // Everything here is a stable fingerprint: colour temperature, halo size,
+  // pulse rate, a faint diffraction spike (angle/length), and how many tiny
+  // motes orbit it — so a person reads as "their" star, never an avatar.
   const style = {
     color: PERSON_COLORS[Math.floor(rand() * PERSON_COLORS.length)],
     sizeJitter: 0.85 + rand() * 0.5,
     twinklePhase: rand() * Math.PI * 2,
     twinkleSpeed: 0.3 + rand() * 0.4,
+    haloScale: 0.8 + rand() * 0.45,
+    spikeAngle: rand() * Math.PI / 2,
+    spikeLen: 3.2 + rand() * 2.6,
+    motes: Math.floor(rand() * 5),
+    moteSeed: rand() * 1000,
   };
   styleCache.set(id, style);
   return style;
@@ -269,12 +260,32 @@ const ringTexture = (() => {
   return new THREE.CanvasTexture(c);
 })();
 
+// faint four-point diffraction spike: two thin, centre-weighted crossed lines
+const spikeTexture = (() => {
+  const size = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  for (const horizontal of [true, false]) {
+    const grad = horizontal
+      ? g.createLinearGradient(0, 0, size, 0)
+      : g.createLinearGradient(0, 0, 0, size);
+    grad.addColorStop(0, "rgba(255,255,255,0)");
+    grad.addColorStop(0.5, "rgba(255,255,255,1)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grad;
+    if (horizontal) g.fillRect(0, size / 2 - 1.5, size, 3);
+    else g.fillRect(size / 2 - 1.5, 0, 3, size);
+  }
+  return new THREE.CanvasTexture(c);
+})();
+
 function textSprite(text, color = "rgba(233,230,222,0.9)") {
   const c = document.createElement("canvas");
   const scale = 2;
   c.width = 256 * scale; c.height = 64 * scale;
   const g = c.getContext("2d");
-  g.font = `${22 * scale}px ui-sans-serif, system-ui, sans-serif`;
+  g.font = `${22 * scale}px Inter, ui-sans-serif, system-ui, sans-serif`;
   g.fillStyle = color;
   g.textAlign = "center";
   g.textBaseline = "middle";
@@ -359,9 +370,27 @@ function nodeFor(star) {
       map: ringTexture, color: 0x9ad1ff, transparent: true, opacity: 0,
       depthWrite: false,
     }));
-    group.add(halo, core, ring);
+    const spike = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: spikeTexture, color: style.color.hex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, rotation: style.spikeAngle,
+    }));
+    const motes = [];
+    for (let i = 0; i < style.motes; i++) {
+      const mote = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: haloTexture, color: style.color.hex, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+      group.add(mote);
+      motes.push(mote);
+    }
+    group.add(halo, spike, core, ring);
     scene.add(group);
-    node = { group, core, halo, ring, label: null, labelText: null, scale: 0 };
+    node = {
+      group, core, halo, ring, spike, motes, label: null, labelText: null, scale: 0,
+      // eased visual state, so status changes (online → recent → dim) and
+      // attention dimming glide instead of popping
+      coreA: 0, haloA: 0, haloR: 0, attn: 1, labelA: 0,
+    };
     starNodes.set(star.id, node);
   }
   return node;
@@ -402,9 +431,22 @@ function quadBezier(a, m, b, t, out) {
 }
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpM = new THREE.Vector3(), tmpP = new THREE.Vector3();
 
-function updateConnections(nowMs, drawEdges) {
+function newestEventIndex(events) {
+  let best = events.length - 1, bestT = -Infinity;
+  events.forEach((ev, i) => {
+    const t = ev.declaredAt ? new Date(ev.declaredAt).getTime() : -Infinity;
+    if (t > bestT) { bestT = t; best = i; }
+  });
+  return best;
+}
+function updateConnections(nowMs, drawEdges, focusId) {
   liveStrandKeys.clear();
   for (const edge of drawEdges) {
+    const touchesFocus = !!focusId && (edge.starA === focusId || edge.starB === focusId);
+    const attnTarget = !focusId ? 1 : touchesFocus ? 1.7 : 0.3;
+    // a just-declared strand stays dark until its travelling light arrives
+    const inFlight = travelInFlight(edge.starA, edge.starB);
+    const newest = inFlight ? newestEventIndex(edge.events ?? []) : -1;
     const pa = physicsFor(edge.starA), pb = physicsFor(edge.starB);
     tmpA.set(pa.x, pa.y, pa.z);
     tmpB.set(pb.x, pb.y, pb.z);
@@ -439,7 +481,8 @@ function updateConnections(nowMs, drawEdges) {
       posAttr.needsUpdate = true;
 
       // age-in: a brand new strand fades up rather than popping into place
-      if (strand.bornAt === undefined) strand.bornAt = nowMs;
+      if (strand.bornAt === undefined || i === newest) strand.bornAt = nowMs;
+      strand.attn = (strand.attn ?? 1) + (attnTarget - (strand.attn ?? 1)) * 0.06;
       const age = (nowMs - strand.bornAt) / 1000;
       const fadeIn = Math.min(1, age / 1.4);
       // Slow, barely-there shimmer rather than a visible pulse — this used to
@@ -447,8 +490,8 @@ function updateConnections(nowMs, drawEdges) {
       // (frantic flicker, especially with several strands fanned on one
       // edge). Both are now ~3x slower: a gentle multi-second drift.
       const pulse = animate ? 0.9 + 0.1 * Math.sin(nowMs * 0.0007 + seed) : 1;
-      const visible = fadeIn * (ev.fade ?? 1) * revealMul;
-      strand.line.material.opacity = ev.brightness * 0.55 * pulse * visible;
+      const visible = fadeIn * (ev.fade ?? 1) * revealMul * strand.attn;
+      strand.line.material.opacity = Math.min(0.95, ev.brightness * 0.55 * pulse * visible);
 
       if (animate) {
         const speed = 0.00005 + (seed % 97) / 97 * 0.00006;
@@ -488,14 +531,30 @@ scene.add(previewLine);
 // --- transient "light travels from A to B" on a new declaration -----------
 // Fired for your own declare immediately, and for anyone else's when the
 // poll notices a new event, so other viewers watch the light arrive too.
-const travels = []; // {fromId, toId, start, duration, sprite}
+// The light leaves A as a bright point trailing a few dimmer dots
+// ("✦ · · ·"), arcs over to B, and only then does the strand itself fade in
+// (see travelInFlight in updateConnections).
+const TRAVEL_TRAIL = 4;
+const travels = []; // {fromId, toId, start, duration, sprites}
 function beginTravel(fromId, toId) {
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: haloTexture, color: 0xffe196, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-  }));
-  sprite.scale.set(14, 14, 1);
-  scene.add(sprite);
-  travels.push({ fromId, toId, start: performance.now(), duration: 1400, sprite });
+  const sprites = [];
+  for (let k = 0; k <= TRAVEL_TRAIL; k++) {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: haloTexture, color: 0xffe196, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const size = k === 0 ? 14 : 6;
+    sprite.scale.set(size, size, 1);
+    scene.add(sprite);
+    sprites.push(sprite);
+  }
+  travels.push({ fromId, toId, start: performance.now(), duration: 1800, sprites });
+}
+function travelInFlight(a, b) {
+  return travels.some((t) => (t.fromId === a && t.toId === b) || (t.fromId === b && t.toId === a));
+}
+function travelPoint(a, b, t, out) {
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + Math.hypot(b.x - a.x, b.z - a.z) * 0.12, z: (a.z + b.z) / 2 };
+  return quadBezier(a, mid, b, t, out);
 }
 
 // --- interaction state -------------------------------------------------
@@ -504,6 +563,53 @@ let hoverStarId = null;
 let selectedTargetId = null;
 const STAR_HIT_PX = 18;
 const EDGE_HIT_PX = 7;
+const ONLINE_MS = 20_000; // the 4s poll is everyone's heartbeat
+const ACTIVE_MS = 10 * 60_000; // declared something this recently → "currently active"
+const FLARE_PERIOD_S = 7;
+
+// Clicking someone's star focuses it: the camera flies to it and stays
+// until you click empty sky (or press Esc). Hover still works on top.
+let focusStarId = null;
+let focusReturnRadius = null;
+function focusStar(id) {
+  if (!focusStarId) focusReturnRadius = cam.desired.radius;
+  focusStarId = id;
+  cam.desired.radius = Math.min(cam.desired.radius, 360);
+}
+function clearFocus() {
+  if (!focusStarId) return;
+  focusStarId = null;
+  if (focusReturnRadius) cam.desired.radius = focusReturnRadius;
+  focusReturnRadius = null;
+}
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { clearFocus(); connectMode = false; setHint(); }
+});
+
+function attentionStarId() {
+  if (historyMode || storyMode || birth) return null;
+  return hoverStarId ?? focusStarId;
+}
+let lastAttentionId = null;
+let attentionSince = 0;
+function neighbourIds(id) {
+  const out = new Set();
+  for (const e of state.edges) {
+    if (e.starA === id) out.add(e.starB);
+    else if (e.starB === id) out.add(e.starA);
+  }
+  return out;
+}
+function activeStarIds() {
+  const cutoff = Date.now() - ACTIVE_MS;
+  const out = new Set();
+  for (const e of state.edges) {
+    for (const ev of e.events ?? []) {
+      if (ev.declaredAt && new Date(ev.declaredAt).getTime() > cutoff) out.add(ev.declaredBy);
+    }
+  }
+  return out;
+}
 
 // --- admin mode: backfill a connection between two *other* people's stars --
 // Not part of the designed visitor experience — a owner-only tool (shift+A,
@@ -540,7 +646,7 @@ function setHint() {
   if (!me) { modeHint.textContent = ""; return; }
   modeHint.textContent = connectMode
     ? "move toward another star, then click to connect — click elsewhere to cancel"
-    : "click your star, then another, to connect";
+    : "drag to drift · scroll to travel deeper · click your star to connect";
 }
 
 canvas.addEventListener(
@@ -627,7 +733,7 @@ const HOVER_RELEASE_MS = 700;
 let hoverSince = 0;
 let hoverLostAt = -Infinity;
 function updateHover(e) {
-  if (historyMode || storyMode || birthTracking()) return;
+  if (historyMode || storyMode || birthTracking() || flight) return;
   if (dragging && dragStart?.moved) {
     if (hoverStarId) hoverLostAt = performance.now();
     hoverStarId = null; hoverAnchor = null;
@@ -646,8 +752,46 @@ function updateHover(e) {
   hoverStarId = id;
 }
 
+// Travel: clicking a connection flies the camera along its curve to the far
+// end (starting from whichever end is focused, else the end nearer the
+// click), then focuses that star and opens the connection's timeline.
+let flight = null; // {fromId, toId, edge, start, duration, startTarget}
+function flyAlongEdge(edge, sx, sy) {
+  let from;
+  if (focusStarId === edge.starA || focusStarId === edge.starB) {
+    from = focusStarId;
+  } else {
+    const a = screenPosOf(edge.starA, camera), b = screenPosOf(edge.starB, camera);
+    from = Math.hypot(a.x - sx, a.y - sy) <= Math.hypot(b.x - sx, b.y - sy) ? edge.starA : edge.starB;
+  }
+  if (!focusStarId) focusReturnRadius = cam.desired.radius;
+  focusStarId = null;
+  hoverStarId = null; hoverAnchor = null;
+  timelinePanel.classList.add("hidden");
+  flight = {
+    fromId: from, toId: from === edge.starA ? edge.starB : edge.starA, edge,
+    start: performance.now(), duration: 3200, startTarget: cam.target.clone(),
+  };
+  cam.desired.radius = 200;
+}
+function stepFlight(nowMs) {
+  if (!flight) return;
+  const t = Math.min(1, (nowMs - flight.start) / flight.duration);
+  const onCurve = travelPoint(physicsFor(flight.fromId), physicsFor(flight.toId), smoothstep(t), new THREE.Vector3());
+  // the first stretch blends in from wherever the camera was looking
+  const target = flight.startTarget.clone().lerp(onCurve, smoothstep(Math.min(1, t / 0.3)));
+  cam.target.copy(target);
+  cam.desired.target.copy(target);
+  if (t >= 1) {
+    const { toId, edge } = flight;
+    flight = null;
+    focusStarId = toId;
+    openTimeline(edge);
+  }
+}
+
 function onCanvasClick(e) {
-  if (historyMode || storyMode) return;
+  if (historyMode || storyMode || flight) return;
   const star = findStarAt(e.clientX, e.clientY);
 
   if (adminMode) {
@@ -670,13 +814,16 @@ function onCanvasClick(e) {
       openConnectPanel(star);
       return;
     }
+    focusStar(star.id);
     return;
   }
 
   if (connectMode) { connectMode = false; setHint(); return; }
 
   const edge = findEdgeAt(e.clientX, e.clientY);
-  if (edge) openTimeline(edge);
+  if (edge) { flyAlongEdge(edge, e.clientX, e.clientY); return; }
+  clearFocus();
+  timelinePanel.classList.add("hidden");
 }
 
 // --- claim / birth sequence --------------------------------------------
@@ -713,7 +860,11 @@ function stepBirth(nowMs) {
     cam.ease = 0.015;
   }
   revealMul = Math.min(1, Math.max(0, (t - BIRTH_PULLBACK_S) / 3.5));
-  if (t >= BIRTH_END_S) { birth = null; cam.ease = 0.07; revealMul = 1; }
+  if (t >= BIRTH_END_S) {
+    birth = null; cam.ease = 0.07; revealMul = 1;
+    // a first-ever visitor gets the guided tour once, straight after birth
+    if (!storySeen()) enterStory();
+  }
 }
 
 async function refreshMe() {
@@ -856,6 +1007,7 @@ forgetBtn.addEventListener("click", async () => {
   if (storyMode) exitStory();
   if (historyMode) exitHistory();
   birth = null; revealMul = 1;
+  clearFocus(); flight = null;
   me = null;
   connectMode = false;
   birthScreen.classList.remove("hidden");
@@ -889,6 +1041,45 @@ async function openTimeline(edge) {
 }
 timelineClose.addEventListener("click", () => timelinePanel.classList.add("hidden"));
 
+// --- floating star info ("ALICE / joined 14 Sep / …") ---------------------
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtDay(d) {
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}${sameYear ? "" : " " + d.getFullYear()}`;
+}
+function fmtLongDate(d) {
+  return `${String(d.getDate()).padStart(2, "0")} ${MONTHS[d.getMonth()].toUpperCase()} ${d.getFullYear()}`;
+}
+function fmtAgo(ms) {
+  if (ms < ONLINE_MS) return "now";
+  const m = Math.floor(ms / 60_000);
+  if (m < 60) return `${Math.max(1, m)}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d === 1 ? "" : "s"} ago`;
+}
+function starInfoHtml(star) {
+  const conns = state.edges.filter((e) => e.starA === star.id || e.starB === star.id).length;
+  const lines = [
+    `<span class="label-name">${escapeHtml(star.pseudonym)}</span>`,
+    `<span class="label-meta">joined ${fmtDay(new Date(star.created_at))}</span>`,
+    `<span class="label-meta">${conns} connection${conns === 1 ? "" : "s"}</span>`,
+    `<span class="label-meta">last seen ${fmtAgo(Date.now() - new Date(star.last_seen_at).getTime())}</span>`,
+  ];
+  if (me && star.id === me.id) {
+    lines.push(`<span class="label-meta label-you">this is you</span>`);
+  } else if (me) {
+    const edge = state.edges.find((e) => (e.starA === me.id && e.starB === star.id) || (e.starB === me.id && e.starA === star.id));
+    if (edge?.events?.length) {
+      const first = Math.min(...edge.events.map((ev) => new Date(ev.occurredOn).getTime()));
+      const days = Math.floor((Date.now() - first) / 86_400_000);
+      lines.push(`<span class="label-meta label-you">← connected to you ${days <= 0 ? "today" : days + " day" + (days === 1 ? "" : "s") + " ago"}</span>`);
+    }
+  }
+  return lines.join("");
+}
+
 // --- history mode: reconstruct a past sky from the real event log ---------
 // No snapshot history is stored — this recomputes stars/edges exactly as
 // they were as of a chosen date, straight from created_at/occurred_on, the
@@ -915,9 +1106,12 @@ function enterHistory() {
   if (!state.stars.length) return;
   historyMode = true;
   connectMode = false; setHint();
+  clearFocus();
   historyBar.classList.remove("hidden");
   historyBtn.classList.add("active");
   historyStartMs = historyTimelineStart();
+  historyStartLabel.textContent = fmtLongDate(new Date(historyStartMs));
+  historyEndLabel.textContent = "NOW";
   historySlider.value = "1000";
   applyHistorySlider();
 }
@@ -931,31 +1125,39 @@ function applyHistorySlider() {
   const now = Date.now();
   const frac = Number(historySlider.value) / 1000;
   historyAsOf = new Date(historyStartMs + frac * (now - historyStartMs));
-  historyDate.textContent = historyAsOf.toISOString().slice(0, 10);
+  historyDate.textContent = frac >= 0.999 ? `${fmtLongDate(historyAsOf)} · now` : fmtLongDate(historyAsOf);
 }
 historyBtn.addEventListener("click", () => (historyMode ? exitHistory() : enterHistory()));
 historyClose.addEventListener("click", exitHistory);
 historySlider.addEventListener("input", applyHistorySlider);
 
 // --- story mode: a scroll-bound guided tour ----------------------------------
-// The camera is one continuous function of scroll progress p ∈ [0, 4] (one
-// unit per 100vh section), evaluated every frame from live star positions —
-// not a set of discrete beats handed between systems, which is what used to
-// make it jump. Progress itself is smoothed toward the real scroll position,
-// so wheel steps glide instead of stepping. Keyframes are spherical poses
-// (target + theta/phi/radius), interpolated with smoothstep:
-//   p=0 intro   wide view of the whole sky
-//   p=1 birth   close on a sample star A (your own, if you have a connection)
-//   1→2 travel  same viewing angle, target slides along A→B's connection curve
-//   p=2         close on B
-//   2→3 memory  pull back while the sky rewinds to before anyone existed
-//   3→4 exit    the sky re-forms up to today as the camera settles on the
-//               exact default Explore pose, so leaving Story never snaps.
-// Opt-in via the `story` button and mutually exclusive with History — see
-// CLAUDE.md.
-const STORY_SECTIONS = 4;
+// The camera is one continuous function of scroll progress p ∈ [0, 5] (one
+// unit per 100vh spacer), evaluated every frame from live star positions —
+// not discrete beats handed between systems, which is what used to make it
+// jump. Progress is smoothed toward the real scroll position, so wheel steps
+// glide. Keyframes are spherical poses (target + theta/phi/radius) joined
+// with smoothstep, so every boundary is continuous by construction:
+//   p=0  01 close on your own star          "You entered the sky"
+//   p=1  02 pulled back around it           "You are not alone"
+//   1→2     dive to A, then slide the target along A→B's connection (yours
+//           if you have one, else any)
+//   p=2  03 close on B                      "Connections shape the sky"
+//   p=3  04 close on the quietest old star  "Old light remains"
+//   3→4     pull back while the sky rewinds to before anyone existed
+//   p=4  05 the empty sky                   "The sky remembers"
+//   4→5     the sky re-forms up to today as the camera settles on the exact
+//   p=5  06 default Explore pose, so leaving Story never snaps.
+// Narrative copy is fixed on the right and faded in by progress, so each
+// line arrives with the camera rather than scrolling past it. Opt-in via the
+// `story` button, plus once automatically after someone's very first birth.
+const storyCopy = document.getElementById("story-copy");
+const storyBeats = [...storyCopy.querySelectorAll(".story-beat")];
+const storyOldLine = document.getElementById("story-old-line");
+const storyScrollHint = document.getElementById("story-scroll-hint");
+const STORY_SECTIONS = storyBeats.length - 1;
 let storyProgress = 0;
-let storyA = null, storyB = null, storyCurveLift = null;
+let storyMe = null, storyA = null, storyB = null, storyOld = null;
 let storyHistoryStart = Date.now();
 
 function computeStoryScene() {
@@ -969,7 +1171,20 @@ function computeStoryScene() {
   } else {
     storyA = storyB = me?.id ?? state.stars[0]?.id ?? null;
   }
-  storyCurveLift = { x: 0, y: 40, z: 0 };
+  storyMe = me?.id ?? storyA;
+  // "old light": the longest-quiet star that still has connections
+  const connected = new Set(state.edges.flatMap((e) => [e.starA, e.starB]));
+  const candidates = state.stars
+    .filter((s) => s.id !== storyA && s.id !== storyB && s.id !== storyMe)
+    .sort((a, b) => new Date(a.last_seen_at) - new Date(b.last_seen_at));
+  const old = candidates.find((s) => connected.has(s.id)) ?? candidates[0] ?? null;
+  storyOld = old?.id ?? storyB;
+  if (old) {
+    const conns = state.edges.filter((e) => e.starA === old.id || e.starB === old.id).length;
+    const ago = fmtAgo(Date.now() - new Date(old.last_seen_at).getTime());
+    storyOldLine.textContent = `${old.pseudonym}, last seen ${ago}. ` +
+      (conns ? `${conns === 1 ? "Their connection remains" : `All ${conns} of their connections remain`}.` : "Their light remains.");
+  }
   storyHistoryStart = historyTimelineStart();
 }
 
@@ -985,31 +1200,41 @@ function lerpPoint(a, b, t) {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
 }
 function lerpPose(a, b, t) {
+  // log-space so a 60 → 900 zoom feels even rather than front-loaded
+  let radius = Math.exp(Math.log(a.radius) + (Math.log(b.radius) - Math.log(a.radius)) * t);
+  // If the targets are far apart relative to how close we're looking, pull
+  // back mid-way (a "hop") so both ends stay in frame instead of panning
+  // across empty space. sin(πt) is 0 at both ends, so keyframes are untouched.
+  const gap = Math.hypot(b.target.x - a.target.x, b.target.y - a.target.y, b.target.z - a.target.z);
+  const hop = Math.max(0, (gap * 1.4) / radius - 1);
+  radius *= 1 + hop * Math.sin(Math.PI * t);
   return {
     target: lerpPoint(a.target, b.target, t),
     theta: a.theta + (b.theta - a.theta) * t,
     phi: a.phi + (b.phi - a.phi) * t,
-    // log-space so a 60 → 900 zoom feels even rather than front-loaded
-    radius: Math.exp(Math.log(a.radius) + (Math.log(b.radius) - Math.log(a.radius)) * t),
+    radius,
   };
 }
 function storyPose(p) {
-  const A = storyStarPos(storyA), B = storyStarPos(storyB);
+  const M = storyStarPos(storyMe), A = storyStarPos(storyA), B = storyStarPos(storyB), O = storyStarPos(storyOld);
   const close = { theta: Math.PI * 0.6, phi: Math.PI * 0.45, radius: 60 };
-  const intro = { target: ORIGIN, theta: Math.PI * 0.22, phi: Math.PI * 0.4, radius: 1500 };
-  const atA = { target: A, ...close };
-  const atB = { target: B, ...close };
+  const near = { theta: Math.PI * 0.6, phi: Math.PI * 0.45, radius: 110 };
+  const atMe = { target: M, ...close };
+  const aroundMe = { target: lerpPoint(M, ORIGIN, 0.5), theta: Math.PI * 0.35, phi: Math.PI * 0.4, radius: 820 };
+  const nearA = { target: A, ...near };
+  const nearB = { target: B, ...near };
+  const atOld = { target: O, theta: Math.PI * 0.15, phi: Math.PI * 0.42, radius: 120 };
   const wide = { target: ORIGIN, theta: Math.PI * 0.05, phi: Math.PI * 0.4, radius: 650 };
   const exit = { target: ORIGIN, ...STORY_DEFAULT };
-  if (p <= 1) return lerpPose(intro, atA, smoothstep(p));
+  if (p <= 1) return lerpPose(atMe, aroundMe, smoothstep(p));
   if (p <= 2) {
-    const t = smoothstep(p - 1);
-    const mid = { x: (A.x + B.x) / 2 + storyCurveLift.x, y: (A.y + B.y) / 2 + storyCurveLift.y, z: (A.z + B.z) / 2 + storyCurveLift.z };
-    const onCurve = quadBezier(A, mid, B, t, { x: 0, y: 0, z: 0 });
-    return { target: onCurve, ...close };
+    const u = p - 1;
+    if (u < 0.45) return lerpPose(aroundMe, nearA, smoothstep(u / 0.45));
+    return { target: travelPoint(A, B, smoothstep((u - 0.45) / 0.55), { x: 0, y: 0, z: 0 }), ...near };
   }
-  if (p <= 3) return lerpPose(atB, wide, smoothstep(p - 2));
-  return lerpPose(wide, exit, smoothstep(Math.min(1, p - 3)));
+  if (p <= 3) return lerpPose(nearB, atOld, smoothstep(p - 2));
+  if (p <= 4) return lerpPose(atOld, wide, smoothstep(p - 3));
+  return lerpPose(wide, exit, smoothstep(Math.min(1, p - 4)));
 }
 
 function stepStory(dt) {
@@ -1027,11 +1252,21 @@ function stepStory(dt) {
   // mirror into `cam` so leaving Story mid-scroll eases from here, not a snap
   cam.theta = pose.theta; cam.phi = pose.phi; cam.radius = pose.radius;
   cam.target.set(pose.target.x, pose.target.y, pose.target.z);
+  cam.desired.target.copy(cam.target);
+
+  // each beat's copy peaks when the camera has arrived at its keyframe
+  storyBeats.forEach((beat, i) => {
+    const o = Math.max(0, Math.min(1, 1 - Math.abs(storyProgress - i) * 2.4));
+    beat.style.opacity = String(o);
+    beat.style.transform = `translateY(${(storyProgress - i) * -18}px)`;
+    beat.classList.toggle("live", o > 0.5);
+  });
+  storyScrollHint.style.opacity = storyProgress < 0.3 ? "1" : "0";
 
   const now = Date.now();
-  if (storyProgress > 2) {
-    // 2→3 rewinds today → before the first star; 3→4 replays forward to today
-    const back = storyProgress <= 3 ? smoothstep(storyProgress - 2) : 1 - smoothstep(Math.min(1, storyProgress - 3));
+  if (storyProgress > 3) {
+    // 3→4 rewinds today → before the first star; 4→5 replays forward to today
+    const back = storyProgress <= 4 ? smoothstep(storyProgress - 3) : 1 - smoothstep(Math.min(1, storyProgress - 4));
     historyStartMs = storyHistoryStart;
     historyAsOf = new Date(now - back * (now - storyHistoryStart));
     historyMode = back > 0.001;
@@ -1047,12 +1282,17 @@ function enterStory() {
   adminMode = false; adminFromId = null;
   adminBadge.classList.add("hidden");
   hoverStarId = null;
+  clearFocus();
+  flight = null;
+  timelinePanel.classList.add("hidden");
+  hoverLabel.classList.add("hidden");
   computeStoryScene();
   storyMode = true;
   storyProgress = 0;
   storyBtn.classList.add("active");
   storyScroll.classList.remove("hidden");
   storyScroll.scrollTop = 0;
+  try { localStorage.setItem("constellation:storySeen", "1"); } catch {}
   setHint();
 }
 function exitStory() {
@@ -1066,6 +1306,9 @@ function exitStory() {
   cam.desired.radius = STORY_DEFAULT.radius;
   cam.desired.target.set(0, 0, 0);
   setHint();
+}
+function storySeen() {
+  try { return localStorage.getItem("constellation:storySeen") === "1"; } catch { return true; }
 }
 storyBtn.addEventListener("click", () => (storyMode ? exitStory() : enterStory()));
 storyEnterBtn.addEventListener("click", exitStory);
@@ -1113,8 +1356,7 @@ function noteSpectacle(stars, edges) {
         const strand = strands.get(`${e.id}:${e.eventCount - 1}`);
         if (strand) strand.bornAt = undefined; // replay the fade-in for the newest strand
       }
-      // events are ordered by date, so the last one is (almost always) the new one
-      const from = e.events?.[e.events.length - 1]?.declaredBy;
+      const from = e.events?.[newestEventIndex(e.events)]?.declaredBy;
       if (from && !(me && from === me.id)) beginTravel(from, from === e.starA ? e.starB : e.starA);
     }
   }
@@ -1137,29 +1379,39 @@ async function pollState() {
   state = next;
   const meData = await meRes.json();
   if (meData.star) me = meData.star;
-  if (!hudStats.hidden) {
-    hudStats.textContent = `${state.stars.length} stars · ${state.edges.length} connections`;
-  }
+  const observers = state.stars.filter((s) => Date.now() - new Date(s.last_seen_at).getTime() < ONLINE_MS).length;
+  hudStats.textContent = `${observers} observer${observers === 1 ? "" : "s"} · ${state.stars.length} stars · ${state.edges.length} connections`;
 }
 pollState();
 setInterval(pollState, 4000);
+// labels drawn before the web font arrived used the fallback face — redraw
+document.fonts?.ready.then(() => { for (const node of starNodes.values()) node.labelText = null; });
 refreshMe();
 
 // --- main loop ---------------------------------------------------------
 let lastT = performance.now();
-let animClock = 0; // virtual clock for idle motion only — speedMultiplier scales this, not wall time
+let animClock = 0; // idle-motion clock; dt is clamped so a backgrounded tab doesn't lurch on return
 function frame(nowMs) {
   const dt = Math.min(0.05, (nowMs - lastT) / 1000);
   lastT = nowMs;
-  animClock += dt * 1000 * speedMultiplier;
+  animClock += dt * 1000;
 
-  if (animate && !historyMode) stepPhysics(dt * speedMultiplier);
-  if (window.__dust && animate) window.__dust.rotation.y += dt * 0.004 * speedMultiplier;
+  if (animate && !historyMode) stepPhysics(dt);
+  if (window.__dust && animate) window.__dust.rotation.y += dt * 0.004;
 
   const drawState = historyMode && historyAsOf ? historicalState() : state;
 
   stepBirth(nowMs);
   if (window.__dust) window.__dust.material.opacity = 0.55 * (0.15 + 0.85 * revealMul);
+
+  // Gravity of attention, part 2: whoever is focused (hovered, or clicked),
+  // their neighbours and you stay lit; everyone else dims a little, and the
+  // neighbours' names surface one after another.
+  const focusId = attentionStarId();
+  if (focusId !== lastAttentionId) { lastAttentionId = focusId; attentionSince = nowMs; }
+  const neighbours = focusId ? neighbourIds(focusId) : null;
+  const neighbourOrder = neighbours ? [...neighbours] : [];
+  const activeIds = activeStarIds();
 
   const drawnIds = new Set();
   for (const star of drawState.stars) {
@@ -1172,41 +1424,78 @@ function frame(nowMs) {
     const style = styleFor(star.id);
     const lastSeen = new Date(star.last_seen_at).getTime();
     const idleMs = Date.now() - lastSeen;
-    const status = idleMs < 15_000 ? "online" : idleMs < 10 * 60_000 ? "recent" : "dim";
+    const status = idleMs < ONLINE_MS ? "online" : idleMs < 10 * 60_000 ? "recent" : "dim";
 
     // grows in on first appearance and on reappearing in History; your own
     // star kindles more slowly during the birth sequence
     node.scale += (1 - node.scale) * (birth && isMe ? 0.025 : 0.04);
     const reveal = isMe ? 1 : revealMul;
+    const related = !focusId || star.id === focusId || isMe || neighbours.has(star.id);
+    node.attn += ((related ? 1 : 0.4) - node.attn) * 0.06;
+    const vis = node.scale * reveal * node.attn;
 
     const twinkle = animate && status === "online"
       ? 0.75 + 0.25 * Math.sin(animClock * 0.0012 * style.twinkleSpeed + style.twinklePhase)
       : 1;
     const baseR = (isMe ? 7 : 4.6 * style.sizeJitter) * node.scale;
     node.core.scale.set(baseR, baseR, 1);
-    node.core.material.opacity = (status === "dim" ? 0.35 : 0.95) * node.scale * reveal;
+    node.coreA += ((status === "dim" ? 0.35 : 0.95) - node.coreA) * 0.03;
+    node.core.material.opacity = node.coreA * vis;
 
-    const haloR = baseR * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 2.4);
-    node.halo.scale.set(haloR, haloR, 1);
-    const haloAlpha = status === "online" ? 0.55 * twinkle : status === "recent" ? 0.3 : 0.08;
-    node.halo.material.opacity = haloAlpha * node.scale * reveal;
+    const haloTargetR = style.haloScale * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 2.4);
+    node.haloR += (haloTargetR - node.haloR) * 0.03;
+    node.halo.scale.set(baseR * node.haloR, baseR * node.haloR, 1);
+    node.haloA += ((status === "online" ? 0.55 : status === "recent" ? 0.3 : 0.08) - node.haloA) * 0.03;
+    node.halo.material.opacity = node.haloA * twinkle * vis;
+
+    // "currently active" (declared something recently): an occasional flare
+    // of the diffraction spike, on a per-star rhythm
+    let flare = 0;
+    if (activeIds.has(star.id) && animate) {
+      const phase = ((animClock / 1000 + style.moteSeed) % FLARE_PERIOD_S) / 0.9;
+      if (phase < 1) flare = Math.sin(Math.PI * phase);
+    }
+    const spikeBase = status === "online" ? 0.16 : status === "recent" ? 0.08 : 0.02;
+    node.spike.material.opacity = (spikeBase + flare * 0.75) * vis;
+    const spikeR = baseR * style.spikeLen * (1 + flare * 0.9);
+    node.spike.scale.set(spikeR, spikeR, 1);
+
+    for (let i = 0; i < node.motes.length; i++) {
+      const mote = node.motes[i];
+      const orbit = baseR * (2.4 + i * 0.8);
+      const ang = (animate ? animClock * 0.00025 * (1 + i * 0.35) : 0) + style.moteSeed + i * 2.1;
+      mote.position.set(Math.cos(ang) * orbit, Math.sin(ang * 0.7) * orbit * 0.4, Math.sin(ang) * orbit);
+      mote.scale.set(baseR * 0.45, baseR * 0.45, 1);
+      mote.material.opacity = (status === "dim" ? 0.1 : 0.45) * vis;
+    }
 
     node.ring.material.opacity = isMe && connectMode ? 0.5 + 0.3 * Math.sin(nowMs * 0.006) : 0;
     const ringR = baseR * 2.6;
     node.ring.scale.set(ringR, ringR, 1);
 
     const dist = camera.position.distanceTo(node.group.position);
-    const showLabel = (isMe || dist < 650 || hoverStarId === star.id) && status !== "dim" || hoverStarId === star.id;
-    if (showLabel) {
+    let labelTarget = 0;
+    if ((isMe || dist < 650) && status !== "dim") labelTarget = related ? 0.8 : 0.25;
+    if (star.id === focusId) labelTarget = 0.9;
+    if (neighbours?.has(star.id)) {
+      // surface one by one, ~180ms apart, after focus begins
+      const k = neighbourOrder.indexOf(star.id);
+      if (nowMs - attentionSince > 250 + k * 180) labelTarget = 0.85;
+    }
+    node.labelA += (labelTarget - node.labelA) * 0.08;
+    if (node.labelA > 0.01) {
       if (node.labelText !== star.pseudonym) {
         if (node.label) { node.group.remove(node.label); disposeSprite(node.label); }
         node.label = textSprite(star.pseudonym);
-        node.label.position.set(0, baseR + 14, 0);
         node.group.add(node.label);
         node.labelText = star.pseudonym;
       }
+      // shrink up close so a name never fills the screen
+      const labelScale = Math.min(1, Math.max(0.12, dist / 450));
+      node.label.scale.set(70 * labelScale, 17.5 * labelScale, 1);
+      node.label.position.set(0, baseR + 14 * labelScale, 0);
       // your own label too waits for the pull-back — up close it's huge
-      node.label.material.opacity = 0.8 * node.scale * revealMul;
+      node.label.material.opacity = node.labelA * node.scale * revealMul;
     } else if (node.label) {
       node.label.material.opacity = 0;
     }
@@ -1219,11 +1508,14 @@ function frame(nowMs) {
     node.scale *= 0.88;
     node.core.material.opacity *= 0.88;
     node.halo.material.opacity *= 0.88;
+    node.spike.material.opacity *= 0.88;
+    for (const mote of node.motes) mote.material.opacity *= 0.88;
     node.ring.material.opacity = 0;
+    node.labelA *= 0.88;
     if (node.label) node.label.material.opacity *= 0.88;
   }
 
-  updateConnections(animClock, drawState.edges);
+  updateConnections(animClock, drawState.edges, focusId);
 
   // gravity preview while in connect-mode and hovering someone else
   if (connectMode && me && hoverStarId && hoverStarId !== me.id) {
@@ -1242,9 +1534,16 @@ function frame(nowMs) {
     const tr = travels[i];
     const t = Math.min(1, (nowMs - tr.start) / tr.duration);
     const a = physicsFor(tr.fromId), b = physicsFor(tr.toId);
-    tr.sprite.position.set(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t);
-    tr.sprite.material.opacity = Math.sin(Math.PI * t) * 0.9;
-    if (t >= 1) { scene.remove(tr.sprite); tr.sprite.material.dispose(); travels.splice(i, 1); }
+    tr.sprites.forEach((sprite, k) => {
+      const tk = Math.max(0, t - k * 0.06);
+      travelPoint(a, b, smoothstep(tk), sprite.position);
+      const fadeOut = t >= 0.9 ? (1 - t) / 0.1 : 1;
+      sprite.material.opacity = (tk > 0 ? (k === 0 ? 0.95 : 0.5 - k * 0.09) : 0) * fadeOut;
+    });
+    if (t >= 1) {
+      for (const sprite of tr.sprites) { scene.remove(sprite); sprite.material.dispose(); }
+      travels.splice(i, 1);
+    }
   }
 
   for (let i = spectacleLabels.length - 1; i >= 0; i--) {
@@ -1262,8 +1561,12 @@ function frame(nowMs) {
   // camera mid-click — that abrupt pan read as the page "twitching" right
   // when clicking someone else's star, since moving the cursor onto a star
   // and clicking it happens well inside that 300ms window.
-  if (birthTracking() || storyMode) {
-    // birth and Story own the camera target
+  stepFlight(nowMs);
+  if (birthTracking() || storyMode || flight) {
+    // birth, Story and a connection flight own the camera target
+  } else if (!historyMode && focusStarId) {
+    const p = physicsFor(focusStarId);
+    cam.desired.target.set(p.x, p.y, p.z);
   } else if (!historyMode && hoverStarId) {
     const p = physicsFor(hoverStarId);
     const pull = Math.min(1, (nowMs - hoverSince) / 300) * 0.3;
@@ -1272,22 +1575,14 @@ function frame(nowMs) {
     cam.desired.target.set(0, 0, 0);
   }
 
-  if (hoverStarId && !historyMode && !storyMode) {
-    const star = state.stars.find((s) => s.id === hoverStarId);
-    if (star) {
-      const p = physicsFor(star.id);
-      const s = projectToScreen(new THREE.Vector3(p.x, p.y, p.z));
-      const joinedDays = Math.floor((Date.now() - new Date(star.created_at).getTime()) / 86_400_000);
-      const seenDays = Math.floor((Date.now() - new Date(star.last_seen_at).getTime()) / 86_400_000);
-      const conns = state.edges.filter((e) => e.starA === star.id || e.starB === star.id).length;
-      hoverLabel.style.left = `${s.x + 18}px`;
-      hoverLabel.style.top = `${s.y - 10}px`;
-      hoverLabel.innerHTML = `<span class="label-name">${escapeHtml(star.pseudonym)}</span>` +
-        `<span class="label-meta">joined ${joinedDays <= 0 ? "today" : joinedDays + "d ago"} · ${conns} connection${conns === 1 ? "" : "s"}</span>` +
-        (seenDays >= 1 ? `<span class="label-meta">last seen ${seenDays}d ago</span>` : "");
-      hoverLabel.classList.remove("hidden");
-    }
-  } else {
+  const labelStar = focusId ? state.stars.find((s) => s.id === focusId) : null;
+  if (labelStar) {
+    const s = screenPosOf(labelStar.id, camera);
+    hoverLabel.style.left = `${s.x + 18}px`;
+    hoverLabel.style.top = `${s.y - 10}px`;
+    hoverLabel.innerHTML = starInfoHtml(labelStar);
+    hoverLabel.classList.toggle("hidden", s.behind);
+  } else if (!storyMode) {
     hoverLabel.classList.add("hidden");
   }
 

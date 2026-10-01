@@ -5,7 +5,8 @@
   --faint: #8d8f98;
   --accent: #9ad1ff;
   --glass-border: rgba(255, 255, 255, 0.08);
-  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --sans: "Inter", ui-sans-serif, system-ui, "Helvetica Neue", Arial, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -15,7 +16,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font-family: ui-sans-serif, system-ui, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--sans);
   overflow: hidden;
 }
 
@@ -131,8 +132,9 @@ button:hover { opacity: 0.85; }
   transition: opacity 0.2s ease;
 }
 .floating.hidden { opacity: 0; }
-.floating .label-name { font-weight: 600; letter-spacing: 0.02em; }
+.floating .label-name { font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; display: block; margin-bottom: 0.25rem; }
 .floating .label-meta { color: var(--faint); font-family: var(--mono); font-size: 0.72rem; display: block; }
+.floating .label-you { color: var(--accent); margin-top: 0.2rem; }
 
 /* --- hud --- */
 #hud {
@@ -263,6 +265,15 @@ button:hover { opacity: 0.85; }
 #history-close { background: transparent; border: none; color: var(--faint); font-size: 0.74rem; font-family: var(--mono); cursor: pointer; padding: 0; }
 #history-close:hover { color: var(--ink); }
 #history-slider { width: 100%; accent-color: var(--accent); }
+.history-range {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  margin-top: 0.2rem;
+}
 
 /* --- story mode: a scroll-bound guided tour, separate scroll surface from
    Explore's own canvas wheel-zoom so the two never fight over input --- */
@@ -274,25 +285,63 @@ button:hover { opacity: 0.85; }
   background: transparent;
 }
 #story-scroll.hidden { display: none; pointer-events: none; }
-.story-section {
-  height: 100vh;
+.story-section { height: 100vh; }
+/* narrative floats on the right over the sky — no panel, just type */
+#story-copy {
+  position: fixed;
+  top: 50%;
+  right: clamp(1.25rem, 7vw, 6rem);
+  transform: translateY(-50%);
+  width: min(360px, calc(100vw - 2.5rem));
+  height: 16rem;
+  pointer-events: none;
+}
+.story-beat {
+  position: absolute;
+  inset: 0;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   justify-content: center;
-  text-align: center;
-  padding: 0 1.5rem;
+  text-align: right;
+  opacity: 0;
+  text-shadow: 0 0 24px rgba(5, 7, 11, 0.95);
 }
-.story-section p {
-  max-width: 440px;
-  font-size: 1.3rem;
-  font-weight: 300;
-  letter-spacing: 0.01em;
+.story-beat.live { pointer-events: auto; }
+.story-num { font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.2em; color: var(--faint); }
+.story-beat h2 {
+  margin: 0.6rem 0 0.7rem;
+  font-weight: 400;
+  font-size: 0.8rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
   color: var(--ink);
-  line-height: 1.6;
-  text-shadow: 0 0 20px rgba(5, 7, 11, 0.9);
 }
-.story-section button {
+.story-beat p {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 300;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.story-beat button {
+  align-self: flex-end;
   margin-top: 1.4rem;
   border-radius: 999px;
   padding: 0.6rem 1.3rem;
+}
+#story-scroll-hint {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  color: var(--faint);
+  pointer-events: none;
+  transition: opacity 0.6s ease;
+}
+@media (max-width: 640px) {
+  #story-copy { top: auto; bottom: 4rem; transform: none; height: 13rem; }
 }
