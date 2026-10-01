@@ -13,6 +13,13 @@ import {
 
 const PORT = Number(process.env.PORT ?? 8080);
 const COOKIE_NAME = "star_id";
+// Lets the site owner backfill real history between two *other* people's
+// stars (declaring on their behalf, e.g. "Alice and Bob met in July"),
+// which the normal /api/connect flow can't do since it always declares from
+// the logged-in star. Disabled unless ADMIN_KEY is set — unset in dev/prod
+// by default, so this never widens the attack surface unless deliberately
+// configured (`fly secrets set ADMIN_KEY=...`).
+const ADMIN_KEY = process.env.ADMIN_KEY || null;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -130,6 +137,21 @@ const server = createServer(async (req, res) => {
       const { to, type, occurredOn, note } = await readJsonBody(req);
       try {
         const edge = declareConnection(star.id, to, type, occurredOn, note);
+        return send(res, 200, { edge });
+      } catch (err) {
+        return send(res, 400, { error: err.message });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/connect") {
+      if (!ADMIN_KEY || req.headers["x-admin-key"] !== ADMIN_KEY) {
+        res.writeHead(404, { "content-type": "text/plain" });
+        return res.end("not found");
+      }
+      const { fromId, toId, type, occurredOn, note, mutual } = await readJsonBody(req);
+      try {
+        const edge = declareConnection(fromId, toId, type, occurredOn, note);
+        if (mutual) declareConnection(toId, fromId, type, occurredOn, note);
         return send(res, 200, { edge });
       } catch (err) {
         return send(res, 400, { error: err.message });

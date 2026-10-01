@@ -54,6 +54,19 @@ connections, brightness comes from a log of events on that edge. See
   changes.** Renaming only updates the display label; it must never touch
   `edge_events.declared_by` or anything else keyed by id — that's what keeps
   append-only history correct across a rename.
+- **Admin backfill (`POST /api/admin/connect`) is a deliberate, narrow
+  exception to "connections are always declared by the logged-in star."** It
+  exists so the site owner can enter real history that predates the site or
+  involves people who can't log in themselves to declare it (e.g. "these two
+  met last year"). It's disabled unless the `ADMIN_KEY` env var is set — unset
+  in dev and prod by default, so the route 404s until someone deliberately
+  runs `fly secrets set ADMIN_KEY=...`. It still goes through the same
+  `declareConnection()` + append-only `edge_events` path as a normal
+  connection (optionally called twice, once per direction, for a mutual
+  backfill) — it does not add any delete/edit capability, so it doesn't
+  weaken the append-only rule above. Client-side it's gated behind a
+  `Shift+A` shortcut + a key typed once into `localStorage`, not surfaced in
+  the normal UI.
 
 ## Stack, briefly
 

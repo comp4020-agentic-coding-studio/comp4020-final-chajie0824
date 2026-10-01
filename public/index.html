@@ -24,6 +24,7 @@
       <div class="hud-top">
         <div class="hud-title">CONSTELLATION</div>
         <div class="hud-stats" id="hud-stats"></div>
+        <span id="admin-badge" class="hidden">ADMIN — shift+A to exit</span>
       </div>
       <div class="hud-bottom">
         <div class="me">you are <strong id="me-name"></strong><button id="rename-btn" title="rename your star" type="button">&#9998;</button></div>
@@ -45,6 +46,10 @@
         <label><input type="radio" name="type" value="met_today" /> We met today</label>
         <label><input type="radio" name="type" value="hung_out" /> We hung out</label>
         <input id="connect-note" maxlength="140" placeholder="say more (optional)" autocomplete="off" />
+        <div id="connect-admin-fields" class="admin-row hidden">
+          <input id="connect-date" type="date" />
+          <label><input type="checkbox" id="connect-mutual" checked /> mutual</label>
+        </div>
         <div class="row">
           <button type="button" id="connect-cancel">Cancel</button>
           <button type="submit">Declare</button>

@@ -24,6 +24,10 @@ const connectForm = document.getElementById("connect-form");
 const connectTarget = document.getElementById("connect-target");
 const connectNote = document.getElementById("connect-note");
 const connectCancel = document.getElementById("connect-cancel");
+const connectAdminFields = document.getElementById("connect-admin-fields");
+const connectDate = document.getElementById("connect-date");
+const connectMutual = document.getElementById("connect-mutual");
+const adminBadge = document.getElementById("admin-badge");
 const hoverLabel = document.getElementById("hover-label");
 const timelinePanel = document.getElementById("timeline-panel");
 const timelineTitle = document.getElementById("timeline-title");
@@ -456,7 +460,38 @@ let selectedTargetId = null;
 const STAR_HIT_PX = 18;
 const EDGE_HIT_PX = 7;
 
+// --- admin mode: backfill a connection between two *other* people's stars --
+// Not part of the designed visitor experience — a owner-only tool (shift+A,
+// then an admin key kept in localStorage) for recording real history that
+// predates this site, where neither side is around to click "connect"
+// themselves. Server-side the endpoint is a 404 unless ADMIN_KEY is set.
+let adminMode = false;
+let adminFromId = null;
+function setAdminHint() {
+  if (!adminMode) return;
+  modeHint.textContent = adminFromId
+    ? "click the other star to connect them — click the same star to cancel"
+    : "admin: click a star to start a connection between two other people";
+}
+window.addEventListener("keydown", (e) => {
+  if (e.key.toLowerCase() !== "a" || !e.shiftKey) return;
+  if (document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+  adminMode = !adminMode;
+  adminFromId = null;
+  adminBadge.classList.toggle("hidden", !adminMode);
+  if (adminMode) {
+    try { if (!localStorage.getItem("constellation:adminKey")) {
+      const key = prompt("admin key (kept only in this browser)");
+      if (key) localStorage.setItem("constellation:adminKey", key);
+    } } catch {}
+    setAdminHint();
+  } else {
+    setHint();
+  }
+});
+
 function setHint() {
+  if (adminMode) { setAdminHint(); return; }
   if (!me) { modeHint.textContent = ""; return; }
   modeHint.textContent = connectMode
     ? "move toward another star, then click to connect — click elsewhere to cancel"
@@ -530,6 +565,16 @@ function onCanvasClick(e) {
   if (historyMode) return;
   const star = findStarAt(e.clientX, e.clientY);
 
+  if (adminMode) {
+    if (star) {
+      if (adminFromId === star.id) { adminFromId = null; setAdminHint(); return; }
+      if (adminFromId) { openConnectPanel(star, adminFromId); return; }
+      adminFromId = star.id;
+      setAdminHint();
+    }
+    return;
+  }
+
   if (star) {
     if (me && star.id === me.id) {
       connectMode = !connectMode;
@@ -537,7 +582,6 @@ function onCanvasClick(e) {
       return;
     }
     if (connectMode && me) {
-      selectedTargetId = star.id;
       openConnectPanel(star);
       return;
     }
@@ -587,19 +631,51 @@ birthForm.addEventListener("submit", async (e) => {
 });
 
 // --- connect panel -------------------------------------------------------
-function openConnectPanel(star) {
-  connectTarget.textContent = star.pseudonym;
+// `adminFromStarId` is only set when admin mode opened this panel between
+// two other people's stars; plain visitor use always connects from `me`.
+let adminPendingFromId = null;
+function openConnectPanel(star, adminFromStarId) {
+  selectedTargetId = star.id;
+  adminPendingFromId = adminFromStarId ?? null;
+  const fromName = adminPendingFromId ? (state.stars.find((s) => s.id === adminPendingFromId)?.pseudonym ?? "?") : null;
+  connectTarget.textContent = adminPendingFromId ? `${fromName} ↔ ${star.pseudonym}` : star.pseudonym;
   connectNote.value = "";
+  connectAdminFields.classList.toggle("hidden", !adminPendingFromId);
+  if (adminPendingFromId) {
+    connectDate.value = new Date().toISOString().slice(0, 10);
+    connectMutual.checked = true;
+  }
   connectPanel.classList.remove("hidden");
 }
 connectCancel.addEventListener("click", () => {
   connectPanel.classList.add("hidden");
-  connectMode = false; setHint();
+  adminPendingFromId = null;
+  adminFromId = null;
+  connectMode = false;
+  setHint();
 });
 connectForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const type = connectForm.querySelector("input[name=type]:checked").value;
   const note = connectNote.value;
+
+  if (adminPendingFromId) {
+    const fromId = adminPendingFromId, toId = selectedTargetId;
+    let adminKey = null;
+    try { adminKey = localStorage.getItem("constellation:adminKey"); } catch {}
+    await fetch("/api/admin/connect", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-admin-key": adminKey ?? "" },
+      body: JSON.stringify({ fromId, toId, type, occurredOn: connectDate.value, note, mutual: connectMutual.checked }),
+    });
+    connectPanel.classList.add("hidden");
+    adminPendingFromId = null;
+    adminFromId = null;
+    setHint();
+    await pollState();
+    return;
+  }
+
   await fetch("/api/connect", {
     method: "POST",
     headers: { "content-type": "application/json" },
