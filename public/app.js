@@ -587,7 +587,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 function attentionStarId() {
-  if (historyMode || storyMode || birth) return null;
+  if (historyMode || storyMode || intro) return null;
   return hoverStarId ?? focusStarId;
 }
 let lastAttentionId = null;
@@ -733,7 +733,7 @@ const HOVER_RELEASE_MS = 700;
 let hoverSince = 0;
 let hoverLostAt = -Infinity;
 function updateHover(e) {
-  if (historyMode || storyMode || birthTracking() || flight) return;
+  if (historyMode || storyMode || inputLocked() || flight) return;
   if (dragging && dragStart?.moved) {
     if (hoverStarId) hoverLostAt = performance.now();
     hoverStarId = null; hoverAnchor = null;
@@ -826,46 +826,90 @@ function onCanvasClick(e) {
   timelinePanel.classList.add("hidden");
 }
 
-// --- claim / birth sequence --------------------------------------------
-// Darkness → your own star kindles (camera close and locked onto it, everyone
-// else hidden) → camera pulls back while the rest of the sky fades in → the
-// camera lets go of your star and settles on the whole constellation.
-const BIRTH_PULLBACK_S = 2.2;
-const BIRTH_RELEASE_S = 7;
-const BIRTH_END_S = 10;
-let birth = null; // {id, start, pulled}
-let revealMul = 1; // 0..1 brightness for everything that isn't your star, during birth
-function startBirth(id) {
-  const p = physicsFor(id);
-  cam.target.set(p.x, p.y, p.z);
-  cam.desired.target.set(p.x, p.y, p.z);
-  cam.radius = cam.desired.radius = 70;
-  cam.ease = 0.07;
-  hoverStarId = null;
-  birth = { id, start: performance.now(), pulled: false };
+// --- intros: watch-only arrival and birth ---------------------------------
+// Two intros, both watch-only (`#input-blocker` swallows pointer, wheel and
+// keys; the HUD stays hidden until they finish):
+//   arrival — every page load with an existing star: your star kindles in
+//     the dark, then the camera pulls back to the whole sky as everyone else
+//     fades in, landing exactly on Explore's default pose.
+//   birth — right after claiming a new star: the *same* kindle, but as
+//     Story's opening — beat 01 copy fades in, then the story auto-scrolls to
+//     beat 02 ("You are not alone") as the sky is revealed, and only then
+//     unlocks with "scroll to continue". One continuous camera, no hand-off.
+const INTRO_KINDLE_S = 1.6;
+const ARRIVAL_PULL_S = 4.6;
+const BIRTH_AUTO_START_S = 4.2;
+const BIRTH_AUTO_S = 4.5;
+const inputBlocker = document.getElementById("input-blocker");
+let intro = null; // {mode: "arrival" | "birth", start}
+let revealMul = 1; // 0..1 brightness for everything that isn't your star
+let storyCopyGate = 1; // holds Story copy back until your star has kindled
+function inputLocked() { return !!intro; }
+function startIntro(mode) {
+  if (!me) return;
+  if (historyMode) exitHistory();
+  clearFocus(); flight = null;
+  hoverStarId = null; hoverAnchor = null; connectMode = false;
+  timelinePanel.classList.add("hidden");
+  const node = starNodes.get(me.id);
+  if (node) node.scale = 0;
+  intro = { mode, start: performance.now() };
+  inputBlocker.classList.remove("hidden");
+  hud.classList.add("hidden");
+  if (mode === "birth") enterStory();
 }
-function birthTracking() {
-  return !!birth && (performance.now() - birth.start) / 1000 < BIRTH_RELEASE_S;
+function endIntro() {
+  intro = null;
+  storyCopyGate = 1;
+  inputBlocker.classList.add("hidden");
+  if (me) hud.classList.remove("hidden");
+  setHint();
 }
-function stepBirth(nowMs) {
-  if (!birth) { revealMul = 1; return; }
-  const t = (nowMs - birth.start) / 1000;
-  if (t < BIRTH_RELEASE_S) {
-    const p = physicsFor(birth.id);
-    cam.desired.target.set(p.x, p.y, p.z);
-  }
-  if (t >= BIRTH_PULLBACK_S && !birth.pulled) {
-    birth.pulled = true;
-    cam.desired.radius = 900;
-    cam.ease = 0.015;
-  }
-  revealMul = Math.min(1, Math.max(0, (t - BIRTH_PULLBACK_S) / 3.5));
-  if (t >= BIRTH_END_S) {
-    birth = null; cam.ease = 0.07; revealMul = 1;
-    // a first-ever visitor gets the guided tour once, straight after birth
-    if (!storySeen()) enterStory();
-  }
+function arrivalPose(u) {
+  const M = storyStarPos(me.id);
+  const k = smoothstep(u);
+  // hold on your star for the first stretch of the pull-back, then drift to
+  // the centre, so your star never slides out of frame mid-way
+  const w = smoothstep(Math.min(1, Math.max(0, (u - 0.45) / 0.55)));
+  return {
+    target: lerpPoint(M, ORIGIN, w),
+    theta: Math.PI * 0.6 + (STORY_DEFAULT.theta - Math.PI * 0.6) * k,
+    phi: Math.PI * 0.45 + (STORY_DEFAULT.phi - Math.PI * 0.45) * k,
+    radius: Math.exp(Math.log(70) + (Math.log(STORY_DEFAULT.radius) - Math.log(70)) * k),
+  };
 }
+// returns true when the intro drove the camera itself this frame
+function stepIntro(nowMs) {
+  storyCopyGate = 1;
+  if (!intro) { revealMul = storyMode ? smoothstep(Math.min(1, storyProgress / 0.85)) : 1; return false; }
+  const t = (nowMs - intro.start) / 1000;
+  if (intro.mode === "arrival") {
+    const u = Math.min(1, Math.max(0, (t - INTRO_KINDLE_S) / ARRIVAL_PULL_S));
+    revealMul = smoothstep(Math.min(1, u / 0.8));
+    applyPose(arrivalPose(u));
+    if (u >= 1) {
+      cam.desired.theta = STORY_DEFAULT.theta; cam.desired.phi = STORY_DEFAULT.phi;
+      cam.desired.radius = STORY_DEFAULT.radius; cam.desired.target.set(0, 0, 0);
+      endIntro();
+    }
+    return true;
+  }
+  // birth: drive Story's own scroll position; stepStory moves the camera
+  storyCopyGate = Math.min(1, Math.max(0, (t - INTRO_KINDLE_S) / 1.2));
+  const a = Math.min(1, Math.max(0, (t - BIRTH_AUTO_START_S) / BIRTH_AUTO_S));
+  storyScroll.scrollTop = (storyScroll.clientHeight || 1) * smoothstep(a);
+  revealMul = smoothstep(Math.min(1, storyProgress / 0.85));
+  if (t >= BIRTH_AUTO_START_S + BIRTH_AUTO_S + 0.8) endIntro();
+  return false;
+}
+// watch-only means watch-only: swallow input while an intro plays
+inputBlocker.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+for (const type of ["pointerdown", "pointerup", "click", "dblclick", "contextmenu"]) {
+  inputBlocker.addEventListener(type, (e) => { e.preventDefault(); e.stopPropagation(); });
+}
+window.addEventListener("keydown", (e) => {
+  if (inputLocked()) { e.preventDefault(); e.stopImmediatePropagation(); }
+}, { capture: true });
 
 async function refreshMe() {
   const res = await fetch("/api/me");
@@ -906,9 +950,9 @@ birthForm.addEventListener("submit", async (e) => {
     ({ res, data } = await claim(pseudonym, true));
   }
   if (res.ok) {
-    await refreshMe();
-    if (me) startBirth(me.id);
     await pollState();
+    await refreshMe();
+    startIntro("birth");
   } else {
     alert(data.error);
   }
@@ -1006,7 +1050,6 @@ forgetBtn.addEventListener("click", async () => {
   await fetch("/api/forget", { method: "POST" });
   if (storyMode) exitStory();
   if (historyMode) exitHistory();
-  birth = null; revealMul = 1;
   clearFocus(); flight = null;
   me = null;
   connectMode = false;
@@ -1150,7 +1193,7 @@ historySlider.addEventListener("input", applyHistorySlider);
 //   p=5  06 default Explore pose, so leaving Story never snaps.
 // Narrative copy is fixed on the right and faded in by progress, so each
 // line arrives with the camera rather than scrolling past it. Opt-in via the
-// `story` button, plus once automatically after someone's very first birth.
+// `story` button, and as the continuation of every new star's birth intro.
 const storyCopy = document.getElementById("story-copy");
 const storyBeats = [...storyCopy.querySelectorAll(".story-beat")];
 const storyOldLine = document.getElementById("story-old-line");
@@ -1237,11 +1280,9 @@ function storyPose(p) {
   return lerpPose(wide, exit, smoothstep(Math.min(1, p - 4)));
 }
 
-function stepStory(dt) {
-  const viewport = storyScroll.clientHeight || 1;
-  const goal = Math.max(0, Math.min(STORY_SECTIONS, storyScroll.scrollTop / viewport));
-  storyProgress += (goal - storyProgress) * (1 - Math.exp(-dt * 5));
-  const pose = storyPose(storyProgress);
+// place the camera at a spherical pose, mirrored into `cam` so whatever
+// takes over next (Explore's damped orbit) eases on from here, not a snap
+function applyPose(pose) {
   const sinPhi = Math.sin(pose.phi);
   camera.position.set(
     pose.target.x + pose.radius * sinPhi * Math.cos(pose.theta),
@@ -1249,19 +1290,26 @@ function stepStory(dt) {
     pose.target.z + pose.radius * sinPhi * Math.sin(pose.theta),
   );
   camera.lookAt(pose.target.x, pose.target.y, pose.target.z);
-  // mirror into `cam` so leaving Story mid-scroll eases from here, not a snap
   cam.theta = pose.theta; cam.phi = pose.phi; cam.radius = pose.radius;
   cam.target.set(pose.target.x, pose.target.y, pose.target.z);
   cam.desired.target.copy(cam.target);
+}
+
+function stepStory(dt) {
+  const viewport = storyScroll.clientHeight || 1;
+  const goal = Math.max(0, Math.min(STORY_SECTIONS, storyScroll.scrollTop / viewport));
+  storyProgress += (goal - storyProgress) * (1 - Math.exp(-dt * 5));
+  applyPose(storyPose(storyProgress));
 
   // each beat's copy peaks when the camera has arrived at its keyframe
   storyBeats.forEach((beat, i) => {
-    const o = Math.max(0, Math.min(1, 1 - Math.abs(storyProgress - i) * 2.4));
+    const o = Math.max(0, Math.min(1, 1 - Math.abs(storyProgress - i) * 2.4)) * storyCopyGate;
     beat.style.opacity = String(o);
     beat.style.transform = `translateY(${(storyProgress - i) * -18}px)`;
     beat.classList.toggle("live", o > 0.5);
   });
-  storyScrollHint.style.opacity = storyProgress < 0.3 ? "1" : "0";
+  // the hint waits for the watch-only opening to finish, then invites the scroll
+  storyScrollHint.style.opacity = !intro && storyProgress < 1.3 ? "1" : "0";
 
   const now = Date.now();
   if (storyProgress > 3) {
@@ -1292,7 +1340,6 @@ function enterStory() {
   storyBtn.classList.add("active");
   storyScroll.classList.remove("hidden");
   storyScroll.scrollTop = 0;
-  try { localStorage.setItem("constellation:storySeen", "1"); } catch {}
   setHint();
 }
 function exitStory() {
@@ -1306,9 +1353,6 @@ function exitStory() {
   cam.desired.radius = STORY_DEFAULT.radius;
   cam.desired.target.set(0, 0, 0);
   setHint();
-}
-function storySeen() {
-  try { return localStorage.getItem("constellation:storySeen") === "1"; } catch { return true; }
 }
 storyBtn.addEventListener("click", () => (storyMode ? exitStory() : enterStory()));
 storyEnterBtn.addEventListener("click", exitStory);
@@ -1382,11 +1426,15 @@ async function pollState() {
   const observers = state.stars.filter((s) => Date.now() - new Date(s.last_seen_at).getTime() < ONLINE_MS).length;
   hudStats.textContent = `${observers} observer${observers === 1 ? "" : "s"} · ${state.stars.length} stars · ${state.edges.length} connections`;
 }
-pollState();
+(async () => {
+  await pollState();
+  await refreshMe();
+  if (me) startIntro("arrival");
+  canvas.classList.add("ready"); // held invisible until now, so no flash of the full sky first
+})();
 setInterval(pollState, 4000);
 // labels drawn before the web font arrived used the fallback face — redraw
 document.fonts?.ready.then(() => { for (const node of starNodes.values()) node.labelText = null; });
-refreshMe();
 
 // --- main loop ---------------------------------------------------------
 let lastT = performance.now();
@@ -1401,7 +1449,7 @@ function frame(nowMs) {
 
   const drawState = historyMode && historyAsOf ? historicalState() : state;
 
-  stepBirth(nowMs);
+  const introDrivesCamera = stepIntro(nowMs);
   if (window.__dust) window.__dust.material.opacity = 0.55 * (0.15 + 0.85 * revealMul);
 
   // Gravity of attention, part 2: whoever is focused (hovered, or clicked),
@@ -1427,8 +1475,8 @@ function frame(nowMs) {
     const status = idleMs < ONLINE_MS ? "online" : idleMs < 10 * 60_000 ? "recent" : "dim";
 
     // grows in on first appearance and on reappearing in History; your own
-    // star kindles more slowly during the birth sequence
-    node.scale += (1 - node.scale) * (birth && isMe ? 0.025 : 0.04);
+    // star kindles more slowly during an intro
+    node.scale += (1 - node.scale) * (intro && isMe ? 0.025 : 0.04);
     const reveal = isMe ? 1 : revealMul;
     const related = !focusId || star.id === focusId || isMe || neighbours.has(star.id);
     node.attn += ((related ? 1 : 0.4) - node.attn) * 0.06;
@@ -1562,8 +1610,8 @@ function frame(nowMs) {
   // when clicking someone else's star, since moving the cursor onto a star
   // and clicking it happens well inside that 300ms window.
   stepFlight(nowMs);
-  if (birthTracking() || storyMode || flight) {
-    // birth, Story and a connection flight own the camera target
+  if (intro || storyMode || flight) {
+    // intros, Story and a connection flight own the camera target
   } else if (!historyMode && focusStarId) {
     const p = physicsFor(focusStarId);
     cam.desired.target.set(p.x, p.y, p.z);
@@ -1586,7 +1634,8 @@ function frame(nowMs) {
     hoverLabel.classList.add("hidden");
   }
 
-  if (storyMode) stepStory(dt);
+  if (introDrivesCamera) { /* arrival placed the camera already */ }
+  else if (storyMode) stepStory(dt);
   else applyCamera();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);

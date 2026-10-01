@@ -78,11 +78,11 @@ connections, brightness comes from a log of events on that edge. See
   remains → the sky remembers → nothing here is fixed). Copy sits fixed on
   the right, numbered, faded in by progress so each line arrives *with* the
   camera, not scrolled past it. Beats 01–02 always centre on your own star;
-  the travel beat uses your connection if you have one, else any. It plays
-  **once automatically right after a first-ever birth** (`storySeen` in
-  localStorage) — this replaced an earlier "never auto-play" call, because
-  starting it *after* the birth sequence ends avoids the collision that
-  call worried about; otherwise it's opt-in via the `story` button. It's mutually
+  the travel beat uses your connection if you have one, else any. **Every
+  new star's birth *is* Story's opening** (see the intros bullet below), so
+  Story continues straight on from a claim with no hand-off; otherwise it's
+  opt-in via the `story` button. Beat 01 dims everyone but you
+  (`revealMul` follows progress up to beat 02), in Story and birth alike. It's mutually
   exclusive with History (entering one exits the other), both being single
   "alternate mode" overlays on top of Explore. **The Story camera is one
   continuous function of (smoothed) scroll progress, `storyPose(p)`,
@@ -166,12 +166,22 @@ connections, brightness comes from a log of events on that edge. See
   There's no loop: once focus drops, the star only travels back along the
   capsule the cursor just left. Dragging the view clears focus.
 
-- **Birth is a camera sequence locked onto your own new star, not the sky's
-  centre** (`startBirth`/`stepBirth`): close-up on your star with everything
-  else (other stars, connections, background dust) dimmed to near-black →
-  pull back while the rest of the sky fades in (`revealMul`) → release the
-  target to the normal origin/gravity behaviour. Gravity-of-attention and
-  hover are suspended while the birth sequence owns the target.
+- **Intros are watch-only, and there are exactly two** (`startIntro` /
+  `stepIntro`). `#input-blocker` swallows pointer, wheel and keys and the
+  HUD stays hidden until they finish — clicking mid-animation used to be
+  able to knock things off course, so don't add an "interrupt" path.
+  - **arrival** — every page load with an existing star: your star kindles
+    in the dark, then the camera pulls back (holding on your star before
+    drifting to centre) while everyone else fades in, landing exactly on
+    Explore's default pose. No Story. The canvas stays invisible until the
+    first poll and `/api/me` resolve, so the full sky never flashes first.
+  - **birth** — right after a claim: the *same* kindle, but it *is* Story's
+    opening: beat 01 copy fades in once your star has kindled, then Story
+    auto-scrolls to beat 02 as the sky is revealed, and only then unlocks
+    with "scroll to continue". A separate birth animation followed by a
+    separate Story used to snap the camera back in at the seam (birth ended
+    wide, beat 01 starts close), and gating Story on a "seen it" flag meant
+    a returning browser silently skipped it.
 
 - **History starts before the first star and fades links in after stars.**
   The slider's left end is a little before the earliest `created_at`, so it
