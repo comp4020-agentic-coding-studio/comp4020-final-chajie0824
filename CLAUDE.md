@@ -44,6 +44,15 @@ connections, brightness comes from a log of events on that edge. See
   must never make clicking imprecise — if a future change makes stars drift
   fast enough that clicks miss, that's a bug in the damping, not an
   acceptable tradeoff.
+- **The "speed" control scales idle motion only (physics drift, twinkle,
+  connection shimmer/photon), via a separate virtual `animClock` the frame
+  loop advances by `realDt * speedMultiplier` — it never touches wall-clock
+  time.** This is deliberately a different axis from History (which scrubs
+  through *past* declared events at their real recorded dates): speed is
+  "how fast does the living sky breathe right now", History is "what did the
+  sky look like on some earlier date". Keep them orthogonal — don't let
+  `speedMultiplier` leak into brightness/recency math or the history
+  timeline, and don't let History scrubbing touch `animClock`.
 - **`/readme/` must keep carrying every heading in `README.md`, in order.**
   `spec/invariants.test.ts` checks this and is not to be edited — if a README
   rewrite breaks it, fix the README's headings or the renderer, not the spec.

@@ -34,6 +34,7 @@ const timelineTitle = document.getElementById("timeline-title");
 const timelineList = document.getElementById("timeline-list");
 const timelineClose = document.getElementById("timeline-close");
 const animateCheckbox = document.getElementById("animate-checkbox");
+const speedBtn = document.getElementById("speed-btn");
 const historyBtn = document.getElementById("history-btn");
 const historyBar = document.getElementById("history-bar");
 const historySlider = document.getElementById("history-slider");
@@ -55,6 +56,24 @@ animateCheckbox.checked = animate;
 animateCheckbox.addEventListener("change", () => {
   animate = animateCheckbox.checked;
   try { localStorage.setItem("constellation:animate", animate ? "1" : "0"); } catch {}
+});
+
+// Speed control: how fast *idle* motion runs (physics drift, twinkle,
+// connection shimmer) — a separate axis from History (which scrubs through
+// *past* declared events, not live animation rate). Like `animate`, this is
+// a pure viewer preference, localStorage-persisted, never gating a feature.
+const SPEEDS = [0.5, 1, 2, 4];
+let speedMultiplier = 1;
+try {
+  const saved = Number(localStorage.getItem("constellation:speed"));
+  if (SPEEDS.includes(saved)) speedMultiplier = saved;
+} catch {}
+function setSpeedLabel() { speedBtn.textContent = `speed ${speedMultiplier}×`; }
+setSpeedLabel();
+speedBtn.addEventListener("click", () => {
+  speedMultiplier = SPEEDS[(SPEEDS.indexOf(speedMultiplier) + 1) % SPEEDS.length];
+  setSpeedLabel();
+  try { localStorage.setItem("constellation:speed", String(speedMultiplier)); } catch {}
 });
 
 // --- deterministic seeds -----------------------------------------------
@@ -259,6 +278,16 @@ function textSprite(text, color = "rgba(233,230,222,0.9)") {
   sprite.scale.set(70, 17.5, 1);
   return sprite;
 }
+// Every textSprite() call allocates its own CanvasTexture; over a long-lived
+// public session (renames, "joined the sky" spectacle labels) never
+// disposing these leaks GPU texture memory, which on a constrained GPU can
+// eventually surface as a failed/placeholder (flat grey) texture elsewhere —
+// so anything built by textSprite() must be disposed through this when
+// removed, not just unparented.
+function disposeSprite(sprite) {
+  sprite.material.map?.dispose();
+  sprite.material.dispose();
+}
 
 // --- background dust + nebula wash (purely decorative, fixed seed) --------
 const SKY_SEED = 1337;
@@ -406,11 +435,15 @@ function updateConnections(nowMs, drawEdges) {
       if (strand.bornAt === undefined) strand.bornAt = nowMs;
       const age = (nowMs - strand.bornAt) / 1000;
       const fadeIn = Math.min(1, age / 1.4);
-      const pulse = animate ? 0.85 + 0.15 * Math.sin(nowMs * 0.002 + seed) : 1;
+      // Slow, barely-there shimmer rather than a visible pulse — this used to
+      // run at ~3s/cycle with a ~3-6s photon loop, which read as "too fast"
+      // (frantic flicker, especially with several strands fanned on one
+      // edge). Both are now ~3x slower: a gentle multi-second drift.
+      const pulse = animate ? 0.9 + 0.1 * Math.sin(nowMs * 0.0007 + seed) : 1;
       strand.line.material.opacity = ev.brightness * 0.55 * pulse * fadeIn;
 
       if (animate) {
-        const speed = 0.00016 + (seed % 97) / 97 * 0.00018;
+        const speed = 0.00005 + (seed % 97) / 97 * 0.00006;
         const phase = (seed % 1000) / 1000;
         const frac = (nowMs * speed + phase) % 1;
         quadBezier(tmpA, tmpM, tmpB, frac, tmpP);
@@ -427,6 +460,8 @@ function updateConnections(nowMs, drawEdges) {
       s.photon.material.opacity *= 0.85;
       if (s.line.material.opacity < 0.01) {
         scene.remove(s.line); scene.remove(s.photon);
+        s.line.geometry.dispose(); s.line.material.dispose();
+        s.photon.material.dispose(); // photon.material.map is the shared haloTexture — leave it
         strands.delete(key);
       }
     }
@@ -555,10 +590,13 @@ function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
+let hoverSince = 0;
 function updateHover(e) {
   if (historyMode) return;
   const star = findStarAt(e.clientX, e.clientY);
-  hoverStarId = star ? star.id : null;
+  const id = star ? star.id : null;
+  if (id !== hoverStarId) hoverSince = performance.now();
+  hoverStarId = id;
 }
 
 function onCanvasClick(e) {
@@ -846,12 +884,14 @@ refreshMe();
 
 // --- main loop ---------------------------------------------------------
 let lastT = performance.now();
+let animClock = 0; // virtual clock for idle motion only — speedMultiplier scales this, not wall time
 function frame(nowMs) {
   const dt = Math.min(0.05, (nowMs - lastT) / 1000);
   lastT = nowMs;
+  animClock += dt * 1000 * speedMultiplier;
 
-  if (animate && !historyMode) stepPhysics(dt);
-  if (window.__dust && animate) window.__dust.rotation.y += dt * 0.004;
+  if (animate && !historyMode) stepPhysics(dt * speedMultiplier);
+  if (window.__dust && animate) window.__dust.rotation.y += dt * 0.004 * speedMultiplier;
 
   const drawState = historyMode && historyAsOf ? historicalState() : state;
 
@@ -877,7 +917,7 @@ function frame(nowMs) {
     node.scale += (entrance - node.scale) * 0.08;
 
     const twinkle = animate && status === "online"
-      ? 0.75 + 0.25 * Math.sin(nowMs * 0.0012 * style.twinkleSpeed + style.twinklePhase)
+      ? 0.75 + 0.25 * Math.sin(animClock * 0.0012 * style.twinkleSpeed + style.twinklePhase)
       : 1;
     const baseR = (isMe ? 7 : 4.6 * style.sizeJitter) * node.scale;
     node.core.scale.set(baseR, baseR, 1);
@@ -896,7 +936,7 @@ function frame(nowMs) {
     const showLabel = (isMe || dist < 650 || hoverStarId === star.id) && status !== "dim" || hoverStarId === star.id;
     if (showLabel) {
       if (node.labelText !== star.pseudonym) {
-        if (node.label) { node.group.remove(node.label); }
+        if (node.label) { node.group.remove(node.label); disposeSprite(node.label); }
         node.label = textSprite(star.pseudonym);
         node.label.position.set(0, baseR + 14, 0);
         node.group.add(node.label);
@@ -908,7 +948,7 @@ function frame(nowMs) {
     }
   }
 
-  updateConnections(nowMs, drawState.edges);
+  updateConnections(animClock, drawState.edges);
 
   // gravity preview while in connect-mode and hovering someone else
   if (connectMode && me && hoverStarId && hoverStarId !== me.id) {
@@ -939,13 +979,19 @@ function frame(nowMs) {
     sl.sprite.position.set(p.x, p.y + 26, p.z);
     const remain = sl.until - nowMs;
     sl.sprite.material.opacity = Math.max(0, Math.min(1, remain / 600));
-    if (remain <= 0) { scene.remove(sl.sprite); spectacleLabels.splice(i, 1); }
+    if (remain <= 0) { scene.remove(sl.sprite); disposeSprite(sl.sprite); spectacleLabels.splice(i, 1); }
   }
 
-  // gravity of attention: the whole view eases a little toward whoever you hover
+  // Gravity of attention: the whole view eases a little toward whoever you
+  // hover. Ramped in over ~300ms (rather than applied at full strength the
+  // instant hoverStarId changes) so a quick point-and-click doesn't yank the
+  // camera mid-click — that abrupt pan read as the page "twitching" right
+  // when clicking someone else's star, since moving the cursor onto a star
+  // and clicking it happens well inside that 300ms window.
   if (!historyMode && hoverStarId) {
     const p = physicsFor(hoverStarId);
-    cam.desired.target.set(p.x * 0.3, p.y * 0.3, p.z * 0.3);
+    const pull = Math.min(1, (nowMs - hoverSince) / 300) * 0.3;
+    cam.desired.target.set(p.x * pull, p.y * pull, p.z * pull);
   } else if (!historyMode) {
     cam.desired.target.set(0, 0, 0);
   }
