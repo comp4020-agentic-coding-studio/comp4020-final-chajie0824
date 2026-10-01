@@ -346,6 +346,7 @@ button:hover { opacity: 0.85; }
   letter-spacing: 0.2em;
   color: var(--faint);
   pointer-events: none;
+  opacity: 0; /* JS reveals it once the opening has played, never flashes first */
   transition: opacity 0.6s ease;
 }
 @media (max-width: 640px) {

@@ -833,13 +833,12 @@ function onCanvasClick(e) {
 //     the dark, then the camera pulls back to the whole sky as everyone else
 //     fades in, landing exactly on Explore's default pose.
 //   birth — right after claiming a new star: the *same* kindle, but as
-//     Story's opening — beat 01 copy fades in, then the story auto-scrolls to
-//     beat 02 ("You are not alone") as the sky is revealed, and only then
-//     unlocks with "scroll to continue". One continuous camera, no hand-off.
+//     Story's opening — beat 01 copy fades in, then it unlocks right there on
+//     page 01 with "scroll to continue", so the reader's own scroll pulls back
+//     into beat 02 and reveals the sky. One continuous camera, no hand-off.
 const INTRO_KINDLE_S = 1.6;
 const ARRIVAL_PULL_S = 4.6;
-const BIRTH_AUTO_START_S = 4.2;
-const BIRTH_AUTO_S = 4.5;
+const BIRTH_UNLOCK_S = INTRO_KINDLE_S + 1.8; // kindle, then beat 01 copy fully in
 const inputBlocker = document.getElementById("input-blocker");
 let intro = null; // {mode: "arrival" | "birth", start}
 let revealMul = 1; // 0..1 brightness for everything that isn't your star
@@ -853,6 +852,14 @@ function startIntro(mode) {
   timelinePanel.classList.add("hidden");
   const node = starNodes.get(me.id);
   if (node) node.scale = 0;
+  // a poll already in flight when you claimed can still announce your own
+  // star as a stranger joining; never show that to you
+  for (let i = spectacleLabels.length - 1; i >= 0; i--) {
+    if (spectacleLabels[i].starId !== me.id) continue;
+    scene.remove(spectacleLabels[i].sprite);
+    disposeSprite(spectacleLabels[i].sprite);
+    spectacleLabels.splice(i, 1);
+  }
   intro = { mode, start: performance.now() };
   inputBlocker.classList.remove("hidden");
   hud.classList.add("hidden");
@@ -894,12 +901,11 @@ function stepIntro(nowMs) {
     }
     return true;
   }
-  // birth: drive Story's own scroll position; stepStory moves the camera
+  // birth: hold Story on page 01 while your star kindles; stepStory moves the camera
   storyCopyGate = Math.min(1, Math.max(0, (t - INTRO_KINDLE_S) / 1.2));
-  const a = Math.min(1, Math.max(0, (t - BIRTH_AUTO_START_S) / BIRTH_AUTO_S));
-  storyScroll.scrollTop = (storyScroll.clientHeight || 1) * smoothstep(a);
+  storyScroll.scrollTop = 0;
   revealMul = smoothstep(Math.min(1, storyProgress / 0.85));
-  if (t >= BIRTH_AUTO_START_S + BIRTH_AUTO_S + 0.8) endIntro();
+  if (t >= BIRTH_UNLOCK_S) endIntro();
   return false;
 }
 // watch-only means watch-only: swallow input while an intro plays
@@ -950,6 +956,9 @@ birthForm.addEventListener("submit", async (e) => {
     ({ res, data } = await claim(pseudonym, true));
   }
   if (res.ok) {
+    // set who you are *before* the poll, or noteSpectacle announces your own
+    // new star as "X joined the sky" — a giant, cut-off label at birth range
+    me = data.star;
     await pollState();
     await refreshMe();
     startIntro("birth");
@@ -1597,7 +1606,9 @@ function frame(nowMs) {
   for (let i = spectacleLabels.length - 1; i >= 0; i--) {
     const sl = spectacleLabels[i];
     const p = physicsFor(sl.starId);
-    sl.sprite.position.set(p.x, p.y + 26, p.z);
+    const k = Math.min(1, Math.max(0.12, camera.position.distanceTo(sl.sprite.position) / 450));
+    sl.sprite.scale.set(70 * k, 17.5 * k, 1);
+    sl.sprite.position.set(p.x, p.y + 26 * k, p.z);
     const remain = sl.until - nowMs;
     sl.sprite.material.opacity = Math.max(0, Math.min(1, remain / 600));
     if (remain <= 0) { scene.remove(sl.sprite); disposeSprite(sl.sprite); spectacleLabels.splice(i, 1); }
