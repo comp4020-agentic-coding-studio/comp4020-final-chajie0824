@@ -1,67 +1,65 @@
 # Constellation
 
-Everyone who opens this app is a star. Claim a pseudonym once — your browser
-remembers it, no account, no password — and you're in the sky.
+Everyone who opens this is a star. Type a name once — the browser remembers
+it, no account — and your star kindles in the dark before the camera pulls
+back to show who's already here. Click your star, then someone else's, and
+say what happened: *we know each other*, *we worked together*, *we hung out*.
+Each declaration is one event on the line between you.
 
-When you recognise another star, you can declare it: *I know this person*,
-*we worked together*, *we met today*. That declaration is one-sided and it
-doesn't need the other person to agree; it just gets logged. If they declare
-back, the line between you changes — from a thin dashed thread (one of you
-has spoken) to a solid one (you've both said something). Declare again later
-— a new event, same edge — and the line stays bright. Stop, and it fades.
-Nothing ever disappears; a star that's gone quiet just dims, the way an old
-friendship does rather than being deleted like a dead account.
+## What good means here
 
-## Why this shape
+**A good shared space remembers the people who shaped it.** Three things
+follow, and they're the brief's three requirements turned into a position:
 
-Most "social" demos treat a connection as a switch: friended or not,
-following or not. That's a bad fit for anything that actually grows between
-people over a term — who you know isn't binary, and how close you are to
-them changes week to week. So an edge here isn't a flag, it's a log:
-`edge_events`, append-only, one row per declared moment. Brightness is a
-function of that log — recent and frequent beats old and once — rather than
-a fact anyone sets directly. The whole point is that the constellation this
-pod/friend-group forms is actually *theirs*, built from what really happened,
-not a seeded demo dataset.
+- **Shared** — the sky only means something with other people in it. Nobody
+  places their own star: weak forces pull connected people together, so
+  clusters *emerge* from who declared what. Nobody draws the constellation.
+- **Shaped** — when someone joins or declares, everyone watching sees it as
+  an event: a star lighting up, a point of light travelling from one person
+  to the other before the line appears.
+- **Remembered** — a connection isn't a switch, it's a log. Brightness comes
+  from how recent and how frequent the events are, so a friendship from last
+  year is fainter old light, not deleted. History lives *in* the sky: drag the
+  timeline back and watch it empty, then fill again.
 
-This only means anything with more than one person in it at once, and only
-stays meaningful if what's declared persists past a single session — which is
-exactly the brief's multi-user/real-time/persistent triangle, not bolted on
-for the assignment's sake.
+Good also means restraint: dark, precise, luminous, and calm enough to leave
+open on a screen in a room.
 
-## What's here for crit 8 ("it's alive")
+## What I read and looked at
 
-This first version proves the deploy path and the data model:
+- Maggie Appleton, [*Ambient Co-presence*](https://maggieappleton.com/ambient-copresence):
+  small, always-on signals of who's around, without demanding attention.
+- Robin Sloan, [*An app can be a home-cooked meal*](https://www.robinsloan.com/notes/home-cooked-app/):
+  software made for a few specific people is a legitimate goal, not a toy.
+- Clay Shirky, [*Situated Software*](https://gwern.net/doc/technology/2004-03-30-shirky-situatedsoftware):
+  build for one group's actual social life instead of for scale.
+- Noah Martin's [A1 globe](https://comp4020-agentic-coding-studio.github.io/comp4020-ass1-Noah-Martin1/):
+  one immersive, manipulable object as the whole page, not a dashboard.
 
-- claim a star, see the whole sky, declare connections, watch brightness and
-  line style respond to what's been declared
-- everything survives a reload — it's in SQLite on the one persistent volume
-  this app gets
-- the sky is pannable and zoomable; click any line to see the dated timeline
-  of what happened between those two stars
+## What it deliberately doesn't do
 
-What it *doesn't* do yet, on purpose: the sky updates by polling every few
-seconds, not a live push, and there's no structured action log beyond what
-SQLite already holds. Those are crit 9 and crit 10's jobs respectively — this
-version is deliberately rough where the brief doesn't ask for more yet.
+No chat, profiles, avatars, likes, follower counts, notifications or friend
+requests — each turns a sky into a feed. You can't drag your own star or
+delete history. "Forget this star" unlinks the browser but leaves the old star
+in the sky. Taking a name that's in use gets a gentle question, not a block.
+Timelines are public to everyone looking, because this is meant to be shown
+to a room.
 
-## A deliberate trade-off
+## Which claims are checked, and which are judged
 
-Clicking a connection's timeline shows it to anyone looking at the sky, not
-just the two people in it. A more private version would gate that to the two
-endpoints. We chose the public version anyway, because this is a demo meant
-to be shown live to a room — a version that might show nothing because the
-viewer isn't one of the two people in it is a worse demo than one that's
-honest about being public. Worth revisiting if this ever left the course.
+Enforced by `spec/` against the running app: a declared connection persists
+and reads as one-sided until the other person declares back; declaring again
+appends rather than replaces; forgetting never deletes a star; a taken name
+warns rather than blocks. Judged, not tested: whether it feels alive, calm and
+legible. I judged those by using it, and by having the agent drive a headless
+browser through every flow and read back screenshots — which is how a
+jumping Story camera and an invisible star mid-transition were caught.
+`CLAUDE.md` holds the rules that keep both true.
 
-## On the idea
+## Honest about the data
 
-The shape of this — ambient, low-effort, persistent markers of who's around
-and who's connected to whom — owes a lot to Maggie Appleton's
-[*Ambient Co-presence*](https://maggieappleton.com/ambient-copresence), which
-argues that the small, long-running, atmosphere-first web tools (a shared
-whiteboard that's just always on, a status light in the corner of a screen)
-do something chat and feeds don't: they let people feel like they're in the
-same room without demanding anyone's attention. A constellation that slowly
-fills in over a term is the same idea pointed at a group of people instead of
-a single shared document.
+The early sky is real people, but its history was backfilled by me from
+memory: who I met when and roughly how often, entered with approximate dates
+spread across days. Everything declared on the live site since is exactly as
+it happened. Real-time is currently a 4-second poll; making it arrive within
+a second is next week's work.

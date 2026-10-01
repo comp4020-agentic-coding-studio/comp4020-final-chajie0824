@@ -11,7 +11,19 @@ connections, brightness comes from a log of events on that edge. See
 - **`edge_events` is append-only.** Never write code that deletes or edits a
   past event, even to "fix" a mistaken declaration — the point of the project
   is that the log is honest history. If a correction is ever needed, it's a
-  new event, not an edit.
+  new event, not an edit. **The one exception is owner-run data curation of
+  the backfilled demo history**, done by hand on the volume with a script
+  committed under `scripts/` (dry-run first, `VACUUM INTO` backup first) and
+  disclosed in README.md — e.g. `scripts/curate-demo-history.js`, which
+  replaced placeholder seed events with approximate real dates chajie gave.
+  Never in app code, never to a real visitor's declarations.
+- **Never point the spec at a database anyone is using.** The `spec/` tests
+  write real stars and connections through the API. Run them only against a
+  throwaway server (`DB_PATH=/tmp/<scratch>.db PORT=5179 node server/index.js`,
+  then `APP_URL=http://localhost:5179 pnpm check`), never the local preview DB
+  and never production. Running them against the preview once filled the sky
+  with `spec-a-…`/`spec-b-…` strangers and "pulled" a new star's connections
+  from them.
 - **Don't reach for real-time push or structured logging yet.** `/api/state`
   is polled on purpose — genuine WebSocket push is crit 9's job and
   structured per-action logging is crit 10's. Adding either early blurs the
