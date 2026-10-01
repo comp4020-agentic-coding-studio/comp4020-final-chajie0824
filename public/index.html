@@ -32,6 +32,7 @@
         <div class="hud-controls">
           <label class="toggle"><input type="checkbox" id="animate-checkbox" checked /><span>animate</span></label>
           <button id="speed-btn" type="button" class="ghost-btn" title="idle motion speed: drift, twinkle, connection shimmer">speed 1×</button>
+          <button id="story-btn" type="button" class="ghost-btn">story</button>
           <button id="history-btn" type="button" class="ghost-btn">history</button>
         </div>
       </div>
@@ -81,6 +82,25 @@
         <button id="history-close" type="button">&times; back to now</button>
       </div>
       <input id="history-slider" type="range" min="0" max="1000" value="1000" step="1" />
+    </div>
+
+    <div id="story-scroll" class="hidden">
+      <section class="story-section" data-beat="intro">
+        <p>A sky made by the people who shaped it.</p>
+      </section>
+      <section class="story-section" data-beat="birth">
+        <p>Every person begins as a single point of light.</p>
+      </section>
+      <section class="story-section" data-beat="travel">
+        <p>Watch a connection form between two people.</p>
+      </section>
+      <section class="story-section" data-beat="memory">
+        <p>The sky remembers who it was.</p>
+      </section>
+      <section class="story-section" data-beat="exit">
+        <p>Nothing here is fixed. Go find your own place in it.</p>
+        <button id="story-enter-btn" type="button">Enter the sky</button>
+      </section>
     </div>
 
     <a id="readme-link" href="/readme/">about this constellation</a>

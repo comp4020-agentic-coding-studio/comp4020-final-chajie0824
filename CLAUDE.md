@@ -77,6 +77,26 @@ connections, brightness comes from a log of events on that edge. See
   `Shift+A` shortcut + a key typed once into `localStorage`, not surfaced in
   the normal UI.
 
+- **Story Mode is a deliberately pragmatic cut of the design doc's full
+  scrollytelling tour, not the whole thing.** It's opt-in via a `story`
+  button next to `history` — never auto-played on first visit, since that
+  would collide with someone's actual birth sequence and detecting "first
+  visit" cleanly isn't worth the bookkeeping for this. It's mutually
+  exclusive with History (entering one exits the other), both being single
+  "alternate mode" overlays on top of Explore. It reuses existing machinery
+  rather than adding a second camera/animation system: every beat but
+  "travel" drives `cam.desired`, the same damped orbit Explore already eases
+  toward; "travel" is the one beat that bypasses it, flying the camera
+  directly along one real connection's existing Bezier curve
+  (`updateConnections`'s curve-construction shape, reused rather than
+  reinvented) and syncing `cam`'s actual spherical state back before handing
+  control to `cam.desired` again, so there's no snap; "memory" drives
+  `historyMode`/`historicalState()` from scroll position instead of a
+  dragged slider — same reconstruction, same decay math, different input.
+  Explore itself does **not** get this same click-a-connection-to-fly-along
+  behaviour outside Story — that's a natural follow-up once the curve-flight
+  code exists, not something "build Story Mode" required.
+
 ## Stack, briefly
 
 Server: plain Node (`node:http`, `node:sqlite`), `marked` for `/readme/` — no

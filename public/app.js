@@ -40,11 +40,15 @@ const historyBar = document.getElementById("history-bar");
 const historySlider = document.getElementById("history-slider");
 const historyDate = document.getElementById("history-date");
 const historyClose = document.getElementById("history-close");
+const storyBtn = document.getElementById("story-btn");
+const storyScroll = document.getElementById("story-scroll");
+const storyEnterBtn = document.getElementById("story-enter-btn");
 
 let me = null;
 let state = { stars: [], edges: [] };
 let historyMode = false;
 let historyAsOf = null; // Date, only while historyMode
+let storyMode = false;
 
 // animate toggle is a pure viewer preference — never gates a feature
 let animate = true;
@@ -592,7 +596,7 @@ function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
 
 let hoverSince = 0;
 function updateHover(e) {
-  if (historyMode) return;
+  if (historyMode || storyMode) return;
   const star = findStarAt(e.clientX, e.clientY);
   const id = star ? star.id : null;
   if (id !== hoverStarId) hoverSince = performance.now();
@@ -600,7 +604,7 @@ function updateHover(e) {
 }
 
 function onCanvasClick(e) {
-  if (historyMode) return;
+  if (historyMode || storyMode) return;
   const star = findStarAt(e.clientX, e.clientY);
 
   if (adminMode) {
@@ -813,6 +817,158 @@ historyBtn.addEventListener("click", () => (historyMode ? exitHistory() : enterH
 historyClose.addEventListener("click", exitHistory);
 historySlider.addEventListener("input", applyHistorySlider);
 
+// --- story mode: a scroll-bound guided tour through four cinematic beats --
+// Reuses existing machinery rather than building a second tweening system:
+// every beat but "travel" moves the camera by writing into `cam.desired`
+// (the same damped orbit the rest of the app eases toward); "travel" is the
+// one exception, bypassing `cam.desired` for the duration of that single
+// scroll transition to fly the camera directly along a real connection's
+// curve, then handing control back by syncing `cam`'s actual spherical
+// state (not just `desired`) to the arrival pose so there's no snap. The
+// "memory" beat drives `historyMode`/`historicalState()` from scroll
+// position instead of a dragged slider — same reconstruction, same decay
+// math, just a different input. Opt-in via the `story` button, not
+// auto-played on first visit, and mutually exclusive with History — see
+// CLAUDE.md for why both are deliberate scope cuts.
+const STORY_BEATS = ["intro", "birth", "travel", "memory", "exit"];
+let storyFlightActive = false;
+let storyWasFlying = false;
+let storyFlightEndPose = null;
+let storySampleStarId = null;
+let storyEdge = null;
+let storyCurveA = null, storyCurveM = null, storyCurveB = null;
+let storyEarliest = Date.now();
+
+function computeStoryScene() {
+  storyEdge = state.edges.find((e) => (e.events ?? []).length > 0) ?? null;
+  if (storyEdge) {
+    storySampleStarId = storyEdge.starA;
+    const pa = physicsFor(storyEdge.starA), pb = physicsFor(storyEdge.starB);
+    storyCurveA = { x: pa.x, y: pa.y, z: pa.z };
+    storyCurveB = { x: pb.x, y: pb.y, z: pb.z };
+    storyCurveM = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 + 40, z: (pa.z + pb.z) / 2 };
+  } else {
+    storySampleStarId = state.stars[0]?.id ?? null;
+    storyCurveA = storyCurveM = storyCurveB = null;
+  }
+  storyEarliest = state.stars.length
+    ? Math.min(...state.stars.map((s) => new Date(s.created_at).getTime()))
+    : Date.now();
+}
+
+function sphericalFromCamera(target) {
+  const rel = { x: camera.position.x - target.x, y: camera.position.y - target.y, z: camera.position.z - target.z };
+  const radius = Math.max(1, Math.hypot(rel.x, rel.y, rel.z));
+  const phi = Math.acos(Math.min(1, Math.max(-1, rel.y / radius)));
+  const theta = Math.atan2(rel.z, rel.x);
+  return { theta, phi, radius, target };
+}
+
+function storyLerpPose(from, to, t) {
+  cam.desired.theta = from.theta + (to.theta - from.theta) * t;
+  cam.desired.phi = from.phi + (to.phi - from.phi) * t;
+  cam.desired.radius = from.radius + (to.radius - from.radius) * t;
+  cam.desired.target.set(
+    from.target.x + (to.target.x - from.target.x) * t,
+    from.target.y + (to.target.y - from.target.y) * t,
+    from.target.z + (to.target.z - from.target.z) * t,
+  );
+}
+
+function onStoryScroll() {
+  if (!storyMode) return;
+  const sections = storyScroll.querySelectorAll(".story-section");
+  const viewport = storyScroll.clientHeight || 1;
+  const idxFloat = storyScroll.scrollTop / viewport;
+  const idx = Math.max(0, Math.min(sections.length - 2, Math.floor(idxFloat)));
+  const frac = Math.max(0, Math.min(1, idxFloat - idx));
+  const beat = STORY_BEATS[idx];
+
+  const origin = { x: 0, y: 0, z: 0 };
+  const sampleTarget = sampleStarPos(storySampleStarId, origin);
+  const arrivalTarget = storyEdge ? sampleStarPos(storyEdge.starB, sampleTarget) : sampleTarget;
+
+  const POSE = {
+    intro: { theta: Math.PI * 0.22, phi: Math.PI * 0.4, radius: 1500, target: origin },
+    birth: { theta: Math.PI * 0.6, phi: Math.PI * 0.45, radius: 36, target: sampleTarget },
+    arrival: { theta: Math.PI * 0.95, phi: Math.PI * 0.45, radius: 36, target: arrivalTarget },
+    memoryWide: { theta: Math.PI * 0.05, phi: Math.PI * 0.4, radius: 650, target: origin },
+    exit: { theta: Math.PI * 0.25, phi: Math.PI * 0.38, radius: 900, target: origin },
+  };
+
+  storyFlightActive = beat === "birth" && !!storyCurveA;
+
+  if (storyFlightActive) {
+    storyWasFlying = true;
+    quadBezier(storyCurveA, storyCurveM, storyCurveB, frac, tmpP);
+    camera.position.set(tmpP.x, tmpP.y, tmpP.z);
+    const ahead = { x: 0, y: 0, z: 0 };
+    quadBezier(storyCurveA, storyCurveM, storyCurveB, Math.min(1, frac + 0.08), ahead);
+    camera.lookAt(ahead.x, ahead.y, ahead.z);
+  } else {
+    if (storyWasFlying) {
+      storyFlightEndPose = sphericalFromCamera(arrivalTarget);
+      cam.theta = storyFlightEndPose.theta;
+      cam.phi = storyFlightEndPose.phi;
+      cam.radius = storyFlightEndPose.radius;
+      cam.target.set(arrivalTarget.x, arrivalTarget.y, arrivalTarget.z);
+      storyWasFlying = false;
+    }
+    if (beat === "intro") storyLerpPose(POSE.intro, POSE.birth, frac);
+    else if (beat === "birth") storyLerpPose(POSE.birth, POSE.birth, frac); // no real edge to fly along — hold
+    else if (beat === "travel") storyLerpPose(storyFlightEndPose ?? POSE.arrival, POSE.memoryWide, frac);
+    else if (beat === "memory") storyLerpPose(POSE.memoryWide, POSE.exit, frac);
+    else storyLerpPose(POSE.exit, POSE.exit, frac);
+  }
+
+  if (beat === "memory") {
+    historyMode = true;
+    const now = Date.now();
+    historyAsOf = new Date(now - frac * (now - storyEarliest));
+  } else {
+    historyMode = false;
+    historyAsOf = null;
+  }
+}
+function sampleStarPos(id, fallback) {
+  if (!id) return fallback;
+  const p = physicsFor(id);
+  return { x: p.x, y: p.y, z: p.z };
+}
+storyScroll.addEventListener("scroll", onStoryScroll, { passive: true });
+
+function enterStory() {
+  if (historyMode) exitHistory();
+  connectMode = false;
+  adminMode = false; adminFromId = null;
+  adminBadge.classList.add("hidden");
+  computeStoryScene();
+  storyMode = true;
+  storyWasFlying = false;
+  storyFlightEndPose = null;
+  storyBtn.classList.add("active");
+  storyScroll.classList.remove("hidden");
+  storyScroll.scrollTop = 0;
+  onStoryScroll();
+  setHint();
+}
+function exitStory() {
+  storyMode = false;
+  storyFlightActive = false;
+  storyWasFlying = false;
+  historyMode = false;
+  historyAsOf = null;
+  storyBtn.classList.remove("active");
+  storyScroll.classList.add("hidden");
+  cam.desired.theta = Math.PI * 0.25;
+  cam.desired.phi = Math.PI * 0.38;
+  cam.desired.radius = 900;
+  cam.desired.target.set(0, 0, 0);
+  setHint();
+}
+storyBtn.addEventListener("click", () => (storyMode ? exitStory() : enterStory()));
+storyEnterBtn.addEventListener("click", exitStory);
+
 function historicalState() {
   const asOf = historyAsOf.getTime();
   const stars = state.stars.filter((s) => new Date(s.created_at).getTime() <= asOf);
@@ -988,15 +1144,15 @@ function frame(nowMs) {
   // camera mid-click — that abrupt pan read as the page "twitching" right
   // when clicking someone else's star, since moving the cursor onto a star
   // and clicking it happens well inside that 300ms window.
-  if (!historyMode && hoverStarId) {
+  if (!historyMode && !storyMode && hoverStarId) {
     const p = physicsFor(hoverStarId);
     const pull = Math.min(1, (nowMs - hoverSince) / 300) * 0.3;
     cam.desired.target.set(p.x * pull, p.y * pull, p.z * pull);
-  } else if (!historyMode) {
+  } else if (!historyMode && !storyMode) {
     cam.desired.target.set(0, 0, 0);
   }
 
-  if (hoverStarId && !historyMode) {
+  if (hoverStarId && !historyMode && !storyMode) {
     const star = state.stars.find((s) => s.id === hoverStarId);
     if (star) {
       const p = physicsFor(star.id);
@@ -1015,7 +1171,7 @@ function frame(nowMs) {
     hoverLabel.classList.add("hidden");
   }
 
-  applyCamera();
+  if (!storyFlightActive) applyCamera();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
