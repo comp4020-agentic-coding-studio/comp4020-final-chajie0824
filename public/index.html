@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Constellation</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div id="claim-screen" class="overlay">
+      <form id="claim-form">
+        <h1>Constellation</h1>
+        <p class="tagline">Everyone here is a star. Claim yours.</p>
+        <input id="pseudonym" name="pseudonym" maxlength="40" placeholder="a name for your star" autocomplete="off" required />
+        <button type="submit">Claim my star</button>
+        <p class="hint">Remembered by this browser — no account, no password.</p>
+      </form>
+    </div>
+
+    <canvas id="sky"></canvas>
+
+    <div id="hud" class="hidden">
+      <div class="me">you are <strong id="me-name"></strong></div>
+      <span class="hint">click another star to declare a connection</span>
+    </div>
+
+    <div id="connect-modal" class="overlay hidden">
+      <form id="connect-form">
+        <h2>Connect to <span id="connect-target"></span></h2>
+        <label><input type="radio" name="type" value="know" checked /> I know this person</label>
+        <label><input type="radio" name="type" value="worked_together" /> We worked together</label>
+        <label><input type="radio" name="type" value="met_today" /> We met today</label>
+        <div class="row">
+          <button type="button" id="connect-cancel">Cancel</button>
+          <button type="submit">Declare</button>
+        </div>
+      </form>
+    </div>
+
+    <aside id="timeline-panel" class="hidden">
+      <button id="timeline-close">&times;</button>
+      <h2 id="timeline-title"></h2>
+      <ol id="timeline-list"></ol>
+    </aside>
+
+    <a id="readme-link" href="/readme/">about this constellation</a>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
