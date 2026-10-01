@@ -5,6 +5,7 @@ import {
   createStar,
   getStar,
   touchStar,
+  renameStar,
   declareConnection,
   getState,
   getEdgeTimeline,
@@ -126,13 +127,23 @@ const server = createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/connect") {
       const star = currentStar(req);
       if (!star) return send(res, 401, { error: "claim a star first" });
-      const { to, type, occurredOn } = await readJsonBody(req);
+      const { to, type, occurredOn, note } = await readJsonBody(req);
       try {
-        const edge = declareConnection(star.id, to, type, occurredOn);
+        const edge = declareConnection(star.id, to, type, occurredOn, note);
         return send(res, 200, { edge });
       } catch (err) {
         return send(res, 400, { error: err.message });
       }
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/me") {
+      const star = currentStar(req);
+      if (!star) return send(res, 401, { error: "claim a star first" });
+      const { pseudonym } = await readJsonBody(req);
+      const name = String(pseudonym ?? "").trim().slice(0, 40);
+      if (!name) return send(res, 400, { error: "pseudonym can't be empty" });
+      const updated = renameStar(star.id, name);
+      return send(res, 200, { star: { id: updated.id, pseudonym: updated.pseudonym } });
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/api/edges/")) {

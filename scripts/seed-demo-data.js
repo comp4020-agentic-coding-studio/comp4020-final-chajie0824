@@ -13,7 +13,7 @@ const db = new DatabaseSync(DB_PATH);
 
 const ME_PSEUDONYM = "CHAJIE";
 
-const FRIENDS = ["ZIHAO LING", "SICHEN YE", "SEONGSU KIM", "ZIYUE WU", "HAO DAN", "KAZUNA", "CHETAN", "GENTO"];
+const FRIENDS = ["ZIHAO LING", "SICHEN YE", "ZIYUE WU", "HAO DAN", "KAZUNA", "CHETAN", "GENTO"];
 const TEACHERS = ["Tom Griffiths", "Ben Swift"];
 
 const TYPES = ["know", "worked_together", "met_today"];

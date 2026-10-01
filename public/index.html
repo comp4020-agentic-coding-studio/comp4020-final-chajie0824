@@ -20,8 +20,12 @@
     <canvas id="sky"></canvas>
 
     <div id="hud" class="hidden">
-      <div class="me">you are <strong id="me-name"></strong></div>
+      <div class="me">you are <strong id="me-name"></strong><button id="rename-btn" title="rename your star" type="button">&#9998;</button></div>
       <span class="hint">click another star to declare a connection</span>
+      <label id="animate-toggle" class="toggle">
+        <input type="checkbox" id="animate-checkbox" checked />
+        <span>animate sky</span>
+      </label>
     </div>
 
     <div id="connect-modal" class="overlay hidden">
@@ -30,9 +34,22 @@
         <label><input type="radio" name="type" value="know" checked /> I know this person</label>
         <label><input type="radio" name="type" value="worked_together" /> We worked together</label>
         <label><input type="radio" name="type" value="met_today" /> We met today</label>
+        <label><input type="radio" name="type" value="hung_out" /> We hung out</label>
+        <input id="connect-note" maxlength="140" placeholder="say more (optional)" autocomplete="off" />
         <div class="row">
           <button type="button" id="connect-cancel">Cancel</button>
           <button type="submit">Declare</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="rename-modal" class="overlay hidden">
+      <form id="rename-form">
+        <h2>Rename your star</h2>
+        <input id="rename-input" maxlength="40" autocomplete="off" required />
+        <div class="row">
+          <button type="button" id="rename-cancel">Cancel</button>
+          <button type="submit">Save</button>
         </div>
       </form>
     </div>

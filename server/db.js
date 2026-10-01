@@ -34,7 +34,16 @@ db.exec(`
   );
 `);
 
-const EVENT_TYPES = new Set(["know", "worked_together", "met_today"]);
+// `note` was added after the first deploy; the live volume's table predates
+// it, so add it defensively rather than assuming a fresh schema.
+try {
+  db.exec("ALTER TABLE edge_events ADD COLUMN note TEXT");
+} catch (err) {
+  if (!String(err.message).includes("duplicate column")) throw err;
+}
+
+const EVENT_TYPES = new Set(["know", "worked_together", "met_today", "hung_out"]);
+const MAX_NOTE_LENGTH = 140;
 
 function pairKey(a, b) {
   return a < b ? [a, b] : [b, a];
@@ -57,6 +66,11 @@ export function touchStar(id) {
   db.prepare("UPDATE stars SET last_seen_at = ? WHERE id = ?").run(new Date().toISOString(), id);
 }
 
+export function renameStar(id, pseudonym) {
+  db.prepare("UPDATE stars SET pseudonym = ? WHERE id = ?").run(pseudonym, id);
+  return getStar(id);
+}
+
 function findOrCreateEdge(starA, starB) {
   const [a, b] = pairKey(starA, starB);
   const existing = db.prepare("SELECT * FROM edges WHERE star_a = ? AND star_b = ?").get(a, b);
@@ -66,17 +80,18 @@ function findOrCreateEdge(starA, starB) {
   return { id, star_a: a, star_b: b };
 }
 
-export function declareConnection(fromStarId, toStarId, type, occurredOn) {
+export function declareConnection(fromStarId, toStarId, type, occurredOn, note) {
   if (fromStarId === toStarId) throw new Error("a star cannot connect to itself");
   if (!EVENT_TYPES.has(type)) throw new Error(`unknown connection type: ${type}`);
   if (!getStar(toStarId)) throw new Error("that star doesn't exist");
+  const cleanNote = String(note ?? "").trim().slice(0, MAX_NOTE_LENGTH) || null;
 
   const edge = findOrCreateEdge(fromStarId, toStarId);
   const id = randomUUID();
   const now = new Date().toISOString();
   db.prepare(
-    "INSERT INTO edge_events (id, edge_id, declared_by, type, occurred_on, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(id, edge.id, fromStarId, type, occurredOn ?? now.slice(0, 10), now);
+    "INSERT INTO edge_events (id, edge_id, declared_by, type, occurred_on, created_at, note) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(id, edge.id, fromStarId, type, occurredOn ?? now.slice(0, 10), now, cleanNote);
   return edge;
 }
 
@@ -122,7 +137,7 @@ export function getEdgeTimeline(edgeId) {
   if (!edge) return null;
   const events = db
     .prepare(
-      "SELECT declared_by, type, occurred_on, created_at FROM edge_events WHERE edge_id = ? ORDER BY occurred_on, created_at",
+      "SELECT declared_by, type, occurred_on, created_at, note FROM edge_events WHERE edge_id = ? ORDER BY occurred_on, created_at",
     )
     .all(edgeId);
   return { edge, events };
