@@ -60,6 +60,49 @@ function currentStar(req) {
   return star;
 }
 
+// Real-time push over server-sent events. Every open /api/stream is a viewer;
+// presence is "has a stream open right now", not "polled recently", so a star
+// lights up and dims within a second of a tab opening or closing. See
+// docs/adr/0001-multi-user-behaviour.md for why it's SSE and full snapshots.
+const streams = new Set();
+const openStreamsByStar = new Map();
+
+function snapshot() {
+  return { ...getState(), online: [...openStreamsByStar.keys()], observers: streams.size };
+}
+
+function broadcast() {
+  if (streams.size === 0) return;
+  const frame = `data: ${JSON.stringify(snapshot())}\n\n`;
+  for (const res of streams) res.write(frame);
+}
+
+function openStream(req, res) {
+  const star = currentStar(req);
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+  });
+  res.write("retry: 2000\n\n");
+  streams.add(res);
+  if (star) openStreamsByStar.set(star.id, (openStreamsByStar.get(star.id) ?? 0) + 1);
+  // Fly's proxy drops idle connections, so keep a comment line flowing.
+  const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 20_000);
+  req.on("close", () => {
+    clearInterval(keepAlive);
+    streams.delete(res);
+    if (star) {
+      const left = (openStreamsByStar.get(star.id) ?? 1) - 1;
+      if (left > 0) openStreamsByStar.set(star.id, left);
+      else openStreamsByStar.delete(star.id);
+      touchStar(star.id);
+    }
+    broadcast();
+  });
+  broadcast();
+}
+
 let readmeCache = null;
 async function renderReadme() {
   const md = await readFile(new URL("../README.md", import.meta.url), "utf8");
@@ -142,11 +185,16 @@ const server = createServer(async (req, res) => {
         "set-cookie",
         `${COOKIE_NAME}=${star.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
       );
-      return send(res, 200, { star: { id: star.id, pseudonym: star.pseudonym } });
+      send(res, 200, { star: { id: star.id, pseudonym: star.pseudonym } });
+      return broadcast();
     }
 
     if (req.method === "GET" && url.pathname === "/api/state") {
-      return send(res, 200, getState());
+      return send(res, 200, snapshot());
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/stream") {
+      return openStream(req, res);
     }
 
     if (req.method === "POST" && url.pathname === "/api/connect") {
@@ -155,7 +203,8 @@ const server = createServer(async (req, res) => {
       const { to, type, occurredOn, note } = await readJsonBody(req);
       try {
         const edge = declareConnection(star.id, to, type, occurredOn, note);
-        return send(res, 200, { edge });
+        send(res, 200, { edge });
+        return broadcast();
       } catch (err) {
         return send(res, 400, { error: err.message });
       }
@@ -170,7 +219,8 @@ const server = createServer(async (req, res) => {
       try {
         const edge = declareConnection(fromId, toId, type, occurredOn, note);
         if (mutual) declareConnection(toId, fromId, type, occurredOn, note);
-        return send(res, 200, { edge });
+        send(res, 200, { edge });
+        return broadcast();
       } catch (err) {
         return send(res, 400, { error: err.message });
       }
@@ -183,7 +233,8 @@ const server = createServer(async (req, res) => {
       const name = String(pseudonym ?? "").trim().slice(0, 40);
       if (!name) return send(res, 400, { error: "pseudonym can't be empty" });
       const updated = renameStar(star.id, name);
-      return send(res, 200, { star: { id: updated.id, pseudonym: updated.pseudonym } });
+      send(res, 200, { star: { id: updated.id, pseudonym: updated.pseudonym } });
+      return broadcast();
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/api/edges/")) {

@@ -1,5 +1,5 @@
-// Constellation — Three.js redesign. State is polled, not pushed (that's
-// W10's job); this file turns the poll into a semi-physical, deep, luminous
+// Constellation — Three.js redesign. State is pushed over SSE; this file
+// turns each snapshot into a semi-physical, deep, luminous
 // sky instead of a flat network graph. See CLAUDE.md for the architecture
 // decision behind adopting Three.js here (client-only, zero server cost).
 import * as THREE from "three";
@@ -530,7 +530,7 @@ scene.add(previewLine);
 
 // --- transient "light travels from A to B" on a new declaration -----------
 // Fired for your own declare immediately, and for anyone else's when the
-// poll notices a new event, so other viewers watch the light arrive too.
+// pushed snapshot carries a new event, so other viewers watch the light arrive too.
 // The light leaves A as a bright point trailing a few dimmer dots
 // ("✦ · · ·"), arcs over to B, and only then does the strand itself fade in
 // (see travelInFlight in updateConnections).
@@ -563,7 +563,7 @@ let hoverStarId = null;
 let selectedTargetId = null;
 const STAR_HIT_PX = 18;
 const EDGE_HIT_PX = 7;
-const ONLINE_MS = 20_000; // the 4s poll is everyone's heartbeat
+const ONLINE_MS = 20_000; // "last seen now" grace for a star that just closed its tab
 const ACTIVE_MS = 10 * 60_000; // declared something this recently → "currently active"
 const FLARE_PERIOD_S = 7;
 
@@ -961,6 +961,7 @@ birthForm.addEventListener("submit", async (e) => {
     me = data.star;
     await pollState();
     await refreshMe();
+    connectStream();
     startIntro("birth");
   } else {
     alert(data.error);
@@ -1062,6 +1063,7 @@ forgetBtn.addEventListener("click", async () => {
   clearFocus(); flight = null;
   me = null;
   connectMode = false;
+  connectStream();
   birthScreen.classList.remove("hidden");
   hud.classList.add("hidden");
 });
@@ -1117,7 +1119,7 @@ function starInfoHtml(star) {
     `<span class="label-name">${escapeHtml(star.pseudonym)}</span>`,
     `<span class="label-meta">joined ${fmtDay(new Date(star.created_at))}</span>`,
     `<span class="label-meta">${conns} connection${conns === 1 ? "" : "s"}</span>`,
-    `<span class="label-meta">last seen ${fmtAgo(Date.now() - new Date(star.last_seen_at).getTime())}</span>`,
+    `<span class="label-meta">${onlineIds.has(star.id) ? "here now" : `last seen ${fmtAgo(Date.now() - new Date(star.last_seen_at).getTime())}`}</span>`,
   ];
   if (me && star.id === me.id) {
     lines.push(`<span class="label-meta label-you">this is you</span>`);
@@ -1391,7 +1393,7 @@ function historicalState() {
   return { stars, edges };
 }
 
-// --- poll-diff "real-time as spectacle" ------------------------------------
+// --- snapshot-diff "real-time as spectacle" ------------------------------------
 let knownStarIds = null;
 let knownEventCounts = null;
 const spectacleLabels = []; // {sprite, until}
@@ -1424,24 +1426,36 @@ function spawnSpectacleLabel(starId, text) {
   spectacleLabels.push({ sprite, starId, until: performance.now() + 3000 });
 }
 
-// --- polling (also doubles as this browser's own heartbeat) ----------------
-async function pollState() {
-  const [stateRes, meRes] = await Promise.all([fetch("/api/state"), fetch("/api/me")]);
-  const next = await stateRes.json();
+// --- live state: pushed over SSE, with a one-off fetch for your own actions --
+let onlineIds = new Set();
+function applyState(next) {
   noteSpectacle(next.stars, next.edges);
   state = next;
+  onlineIds = new Set(next.online ?? []);
+  const observers = next.observers ?? onlineIds.size;
+  hudStats.textContent = `${observers} observer${observers === 1 ? "" : "s"} · ${state.stars.length} stars · ${state.edges.length} connections`;
+}
+async function pollState() {
+  const [stateRes, meRes] = await Promise.all([fetch("/api/state"), fetch("/api/me")]);
+  applyState(await stateRes.json());
   const meData = await meRes.json();
   if (meData.star) me = meData.star;
-  const observers = state.stars.filter((s) => Date.now() - new Date(s.last_seen_at).getTime() < ONLINE_MS).length;
-  hudStats.textContent = `${observers} observer${observers === 1 ? "" : "s"} · ${state.stars.length} stars · ${state.edges.length} connections`;
+}
+// The server only knows whose star a stream belongs to from the cookie at
+// connect time, so claiming or forgetting reopens it.
+let stream = null;
+function connectStream() {
+  stream?.close();
+  stream = new EventSource("/api/stream");
+  stream.onmessage = (e) => applyState(JSON.parse(e.data));
 }
 (async () => {
   await pollState();
   await refreshMe();
+  connectStream();
   if (me) startIntro("arrival");
   canvas.classList.add("ready"); // held invisible until now, so no flash of the full sky first
 })();
-setInterval(pollState, 4000);
 // labels drawn before the web font arrived used the fallback face — redraw
 document.fonts?.ready.then(() => { for (const node of starNodes.values()) node.labelText = null; });
 
@@ -1479,9 +1493,8 @@ function frame(nowMs) {
 
     const isMe = me && star.id === me.id;
     const style = styleFor(star.id);
-    const lastSeen = new Date(star.last_seen_at).getTime();
-    const idleMs = Date.now() - lastSeen;
-    const status = idleMs < ONLINE_MS ? "online" : idleMs < 10 * 60_000 ? "recent" : "dim";
+    const idleMs = Date.now() - new Date(star.last_seen_at).getTime();
+    const status = onlineIds.has(star.id) ? "online" : idleMs < 10 * 60_000 ? "recent" : "dim";
 
     // grows in on first appearance and on reappearing in History; your own
     // star kindles more slowly during an intro
