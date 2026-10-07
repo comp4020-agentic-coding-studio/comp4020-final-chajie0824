@@ -1,28 +1,28 @@
 # Crit 9 reflection
 
-<!--
-DRAFT NOTES, NOT THE REFLECTION. Rewrite in your own words (150-300 words)
-before the crit 9 cutoff, then delete this comment and the bullets.
-The cutoff sweep reads this exact filename.
--->
-
 ## What was the breakthrough that moved the work forward?
 
-- Realising the "mechanism vs. decision" split: SSE vs WebSockets was nearly
-  forced by the stack (plain node:http, one-way traffic) — the real choice was
-  how presence should *feel*.
-- Two of the three candidate decisions (simultaneous edits, reconnect) were
-  already answered by earlier choices: append-only log, History as catch-up.
-  The earlier decisions paid off.
-- Presence used to mean "requested in the last 20 s"; with no poll there was
-  no heartbeat, and it lied for 20 s after someone left. Redefining it as
-  "has a stream open" made it true to the second.
-- (Your own moment: what did you notice when you opened it on two devices?)
+Separating the mechanism from the decision. I started out thinking the week
+was about "adding real-time", and that the choice was WebSockets or
+server-sent events. Once the agent checked the code, that choice turned out to
+be nearly forced: a plain `node:http` server, traffic that only flows one
+way, and a rule against adding frameworks all point to SSE. The real question
+was how several people at once should *feel* in the sky. Of the three
+candidates (presence, simultaneous edits, what a returning viewer sees), two
+were already answered by decisions I'd made weeks ago. Declarations are
+append-only, so they can't conflict, and History already lets you catch up.
+That left presence. Choosing "light only" exposed a hidden lie in the old
+version: a star stayed lit for twenty seconds after its owner left, because
+"online" meant "polled recently". Defining it as "has the sky open right now"
+made the glow true to the second.
 
 ## What did this work change about who I want to be as a software developer?
 
-- Choosing the less legible option (glow, not a list) on purpose, because it
-  matches what the README says "good" means — and being ready to argue the
-  other side at the crit.
-- Tests passed, but only two real browsers showed it actually felt live.
-- (Your own view: what do you want to keep doing next crit?)
+I want my early decisions to keep paying off, and this week showed they can.
+Because the log was append-only from the first commit, a whole category of
+multi-user problems never existed. I also want to be comfortable choosing the
+less obvious option on purpose. A "who's here" list would be clearer, and I
+expect the crit to argue for it, but it would contradict what my README says
+good means. Being able to say why I'm not building it matters more than
+building it. And I still trust what I see over what passes: the tests were
+green, but only two real browsers updating each other showed it felt live.
