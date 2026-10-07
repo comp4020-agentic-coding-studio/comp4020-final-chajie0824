@@ -34,10 +34,10 @@ step. The trade-off is a CDN dependency and GPU work on visitors' machines.
 `CLAUDE.md` records it as a deliberate revision of the earlier "no framework"
 rule, whose reason was always the server's budget.
 
-**Polling, for now.** State is polled every 4 seconds. That is on purpose for
-crit 8: `CLAUDE.md` forbids building push early, so each week's requirement
-stays its own decision. Whether to use WebSockets or server-sent events
-belongs to crit 9.
+**Polling first, then server-sent events.** For crit 8 state was polled every
+4 seconds, on purpose: `CLAUDE.md` forbade building push early, so each week's
+requirement stayed its own decision. Crit 9 replaced the poll with SSE (see
+below).
 
 ## How I work with the agent
 
@@ -117,8 +117,45 @@ spread that across distinct days. It was dry-run first and backed up first,
 and is recorded in `CLAUDE.md` as the single exception to append-only. The
 README says plainly that this history is backfilled.
 
+## Crit 9: all at once
+
+The crit asks for two things: changes reaching every open session in about a
+second, and one defended decision about several people at once.
+
+**Mechanism.** The 4-second poll became server-sent events
+([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)).
+Every write route calls `broadcast()`, which sends the full state to every
+open `/api/stream`. SSE rather than WebSockets because the server is plain
+`node:http`, the traffic only ever flows one way, and `EventSource`
+reconnects on its own. No new dependency.
+
+**The decision: presence is light only.** I chose it from three candidates
+the agent laid out (presence, simultaneous edits, what a returning viewer
+sees). The other two turned out to be answered by choices I'd already made:
+declarations are append-only, so they can't conflict, and History is already
+the way to catch up. Presence was the one with a real trade-off against the
+README. A "who's here" list would be clearer, but it's the dashboard chrome
+`CLAUDE.md` keeps off the sky. So a star glows and twinkles while its owner
+has the sky open, and nothing else announces it. The reasoning and the
+rejected alternatives are in `docs/adr/0001-multi-user-behaviour.md`, and the
+rule is in `CLAUDE.md`.
+
+**A correction that came from the decision.** Presence used to mean "made a
+request in the last 20 seconds", fed by the poll. With no poll there was no
+heartbeat, and even with one it kept a star lit for 20 seconds after someone
+left. Presence now means "has a stream open right now", tracked on the server
+per star, so it is true to the second. The stream identifies its owner from
+the cookie when it opens, which surfaced one more thing: after claiming or
+forgetting a star the browser has to reopen its stream, or your own star never
+lights.
+
+**Checking it.** `spec/realtime.test.ts` opens real SSE streams against a
+scratch server and checks that a new star and a new declaration arrive within
+a second, and that a star is online exactly while its owner's stream is open.
+I also had the agent drive two headless Chrome sessions: one claimed a star
+and the other's page updated in about 200 ms, with no console errors.
+
 ## Next
 
-Crit 9 needs changes to arrive within about a second, plus one written
-decision about several people acting at once, for example two people
-declaring the same connection in the same moment.
+Crit 10 ("Fly by instruments") is structured server-side logging and a live
+activity view. The SSE stream is the obvious carrier for that view.

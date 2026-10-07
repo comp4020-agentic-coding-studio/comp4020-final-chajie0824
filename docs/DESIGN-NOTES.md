@@ -95,7 +95,7 @@ off course, so don't add an "interrupt" path.
 - **arrival** — every page load with an existing star: your star kindles in
   the dark, then the camera pulls back (holding on your star before drifting
   to centre) while everyone else fades in, landing exactly on Explore's
-  default pose. No Story. The canvas stays invisible until the first poll and
+  default pose. No Story. The canvas stays invisible until the first state fetch and
   `/api/me` resolve, so the full sky never flashes first.
 - **birth** — right after a claim: the *same* kindle, but it *is* Story's
   opening: beat 01 copy fades in once your star has kindled, then it unlocks
@@ -105,7 +105,7 @@ off course, so don't add an "interrupt" path.
   separate birth animation followed by a separate Story used to snap the
   camera back in at the seam (birth ended wide, beat 01 starts close), and
   gating Story on a "seen it" flag meant a returning browser silently skipped
-  it. On claim, `me` is set *before* the first poll, and `startIntro` purges
+  it. On claim, `me` is set *before* the first state fetch, and `startIntro` purges
   any "joined the sky" label on your own star — otherwise your own birth was
   announced to you as a stranger, a giant cut-off label at close range.
 
@@ -121,7 +121,7 @@ which left them frozen at full brightness. Dates read "01 SEP 2026", with the
 slider's start date and "NOW" under its ends.
 
 Other viewers see a travelling light for every new declaration, not just the
-declarer: the poll diff (`noteSpectacle`) fires `beginTravel` from whoever
+declarer: the snapshot diff (`noteSpectacle`, run on every SSE push) fires `beginTravel` from whoever
 declared the newest event, alongside "X joined the sky".
 
 ## Stack history

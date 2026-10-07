@@ -26,14 +26,20 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   and never production. Running them against the preview once filled the sky
   with `spec-a-…`/`spec-b-…` strangers and "pulled" a new star's connections
   from them.
-- **Real-time push and structured logging are explicit future milestones, not
-  "do it whenever it's easy."** Per the course site, live sync across sessions
-  is the week-10 crit ("All at once") and server-side action logging with a
-  live activity view is the week-11 crit ("Fly by instruments") — `/api/state`
-  is polled on purpose until then. Re-check the course site before relying on
-  these week numbers, since the schedule can change; the point is to keep the
-  two deliverables deliberately separate, not to hard-code a specific crit
-  number forever.
+- **Live state is pushed over SSE (`GET /api/stream`), always as a full
+  snapshot.** Every write route (`claim`, `connect`, `admin/connect`,
+  `PATCH /api/me`) must call `broadcast()` after it succeeds, or other viewers
+  won't see it. Don't switch to WebSockets or add a push library; don't send
+  diffs or replay missed events on reconnect — History is the catch-up view.
+  Decision and alternatives: `docs/adr/0001-multi-user-behaviour.md`.
+- **Presence is light only.** "Online" means the star's owner has a stream
+  open right now (`snapshot().online`), never "made a request recently". It
+  shows as glow/twinkle and "here now" on hover — no who's-here list, no
+  arrival/departure messages, no typing or cursor indicators. Those were
+  considered and rejected in the ADR; don't add them without revisiting it.
+- **Structured logging with a live activity view is the next crit's work
+  ("Fly by instruments"), not something to fold in early.** Re-check the course
+  site for the week before relying on it.
 - **The connection timeline stays public** (visible to anyone viewing the
   sky, not gated to the two people in it). This was a deliberate trade-off
   for demo reliability, decided explicitly — don't "fix" it into a private

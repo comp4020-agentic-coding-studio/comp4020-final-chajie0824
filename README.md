@@ -50,7 +50,8 @@ to a room.
 Enforced by `spec/` against the running app: a declared connection persists
 and reads as one-sided until the other person declares back; declaring again
 appends rather than replaces; forgetting never deletes a star; a taken name
-warns rather than blocks. Judged, not tested: whether it feels alive, calm and
+warns rather than blocks; a new star or declaration reaches an open sky within
+a second; a star is lit exactly while its owner has the sky open. Judged, not tested: whether it feels alive, calm and
 legible. I judged those by using it, and by having the agent drive a headless
 browser through every flow and read back screenshots — which is how a
 jumping Story camera and an invisible star mid-transition were caught.
@@ -61,5 +62,6 @@ jumping Story camera and an invisible star mid-transition were caught.
 The early sky is real people, but its history was backfilled by me from
 memory: who I met when and roughly how often, entered with approximate dates
 spread across days. Everything declared on the live site since is exactly as
-it happened. Real-time is currently a 4-second poll; making it arrive within
-a second is next week's work.
+it happened. Changes are pushed to every open sky as they happen, and a star
+glows only while its owner actually has the sky open — presence is light, not
+a list (see `docs/adr/0001-multi-user-behaviour.md`).
