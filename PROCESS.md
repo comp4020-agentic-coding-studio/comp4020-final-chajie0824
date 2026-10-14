@@ -2,126 +2,127 @@
 
 ## From the brief to one sentence
 
-Before writing code I worked the idea through in a long design conversation,
-kept outside the repo. Its argument was that a "social graph" demo becomes a
-student exercise the moment nodes sit still and lines are straight, and that
-the brief's three requirements read better as one position: **a good shared
-space remembers the people who shaped it** (now the core of `README.md`).
-Shared, shaped and remembered became multi-user, real-time and persistent. It
-also set a list of things never to build: chat, profiles, likes, friend
-requests.
+I started by discussing the idea with the agent before writing code. I wanted
+something more personal than a graph of dots and lines, but I was not sure
+what that should be. The idea I settled on was that a good shared space
+remembers the people who shaped it. This gave me a way to connect the brief's
+multi-user, real-time and persistent requirements. It also helped me leave out
+features like chat, profiles, likes and friend requests.
 
-That position comes from the small-scale reading. Shirky's *Situated
-Software* and Sloan's *home-cooked meal* argue for software built for one
-group's actual social life rather than for scale; Appleton's *Ambient
-Co-presence* argues for signals you notice rather than check. I take them
-further than they go on one point: at small scale, **restraint is a feature
-you have to defend, not a default you fall into**. Every week the obvious
-addition (a who's-here list, an activity feed, accounts) was a scale-shaped
-answer, and each time the README was the reason to refuse it.
+Shirky and Sloan helped me think about making software for a small group.
+Appleton's writing on ambient co-presence influenced how people appear in the
+sky. As the project grew, I found that keeping the scope small needed regular
+attention. Sometimes I was the one asking for extra features, so the README
+became a useful reminder of what I originally wanted.
 
 The first version
 ([`8ae37b7`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/8ae37b7))
-proved the deploy path and the one data decision I didn't want to revisit: a
-connection is not a flag but an append-only log of declared events, and
-brightness is computed from it. Most of what followed leaned on that.
+established a decision I kept throughout: connections store a history of
+declared events, and brightness is calculated from that history.
 
 ## Why this stack
 
-**Plain Node `http` plus `node:sqlite`, no framework.** The course gives one
-256 MB machine and one volume. A SQLite file on that volume is the only
-persistence allowed, and synchronous `DatabaseSync` is fast enough for one
-process. A framework would spend memory and give the routes nothing.
-
-**Three.js from a CDN, no bundler.** The sky started as Canvas2D. Once the
-design needed depth, a slow physical layout and light travelling along curves,
-it moved to Three.js
+I used plain Node `http` with `node:sqlite` for one 256 MB machine and one
+volume. This kept the server simple and avoided adding a framework. The sky
+started with Canvas2D, then moved to Three.js
 ([`3063865`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/3063865))
-through an import map: zero server memory, no build step, at the cost of a CDN
-dependency and GPU work on visitors' machines.
+when I wanted depth and light travelling along curved connections. It loads
+through a CDN import map, so there is no build step. The trade-off is that it
+depends on the CDN and the visitor's GPU.
 
-**Poll, then server-sent events.** Crit 8 polled every 4 seconds on purpose,
-because `CLAUDE.md` forbade building push early. Crit 9 replaced it with SSE
-([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)):
-traffic only flows one way, `EventSource` reconnects by itself, and there is
-no new dependency. WebSockets would add a library for a channel nothing uses.
+For crit 8, I used polling every four seconds. I had explicitly put off push
+updates in `CLAUDE.md`. For crit 9, I changed this to server-sent events
+([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)).
+Updates only need to travel from the server to the browser, and `EventSource`
+handles reconnection. This seemed simpler than adding WebSockets, as explained
+in ADR 0001. Sound uses Web Audio
+([`6b24ec5`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/6b24ec5)),
+which lets me generate it without audio files or another build step.
 
 ## How I work with the agent
 
-I use Claude Code in the repo. `CLAUDE.md` holds rules, written when a
-decision is made rather than afterwards; the reasoning behind each larger
-decision is an ADR in `docs/adr/`. I use the app myself and report exactly
-what I see. The agent reproduces the problem, finds the root cause, commits
-each change, and never pushes or deploys without my say-so.
+I use Claude Code inside the repository. Usually I try the site first, then
+describe what I saw and what felt wrong. The agent investigates and implements
+the change. It commits changes separately and only pushes when I ask, because
+pushing to `main` triggers deployment. I record decisions in `CLAUDE.md`,
+including why they were needed. Larger decisions have an ADR.
 
-Verification has three layers: `spec/` against a scratch server, headless
-Chrome driven through real flows with screenshots read back, and my own use.
-Each layer caught things the others missed.
+I check changes with `spec/` on a temporary server, headless Chrome
+screenshots, and my own use of the site. These checks catch different things.
+Passing tests did not always mean I was happy with the result. The permission
+problem showed that a test can miss a behaviour I have not thought to question.
+The visual changes showed a different limit: the code can work as requested
+while the overall result still feels wrong. These experiences helped me be
+more specific about what I wanted each check to tell me.
 
-## Corrections that landed in the harness
+## Who counts as a person
 
-**Hover jitter took three attempts.** Hovering a star pans the camera toward
-it, so the star moves out from under the mouse. Widening the hit radius
-([`44d0362`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/44d0362))
-didn't hold. Hit-testing against a camera the pan never moves
-([`2ffa3d7`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/2ffa3d7))
-broke clicking, so I couldn't connect at all. The fix that stuck shares one
-focus zone between hover and click
-([`5ff7e97`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/5ff7e97)),
-and `docs/DESIGN-NOTES.md` records why each earlier attempt failed so it
-isn't "simplified" back.
+Before crit 10, I asked the agent to check the server against the brief's
+failure case. It found that the cookie contained only the star's id. Since
+every snapshot includes all star ids, someone could copy another id into their
+cookie and act as that person. I had described the app as multi-user since
+crit 8, but I had only checked that two browsers could use different stars.
+I had not tried impersonating someone.
 
-**The spec polluted my own sky.** Strangers named `spec-a-…` appeared because
-the agent ran the tests against my preview database. `CLAUDE.md` now forbids
-pointing the spec at any database someone uses.
-
-**Reset left duplicates.** "Forget this star" never deletes, so typing my name
-again made two of me. Of three options I chose a gentle warning at claim time
-([`21e087a`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/21e087a)),
-now a rule and a test.
-
-**Presence lied for twenty seconds.** It meant "polled recently", so a star
-stayed lit after its owner left. Deciding presence for crit 9 exposed it; it
-now means "has a stream open right now"
-([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)),
-recorded in ADR 0001 and checked by `spec/realtime.test.ts`.
-
-**Anyone could be anyone.** The biggest correction came from an audit rather
-than a bug report. Before adding logging for crit 10, I had the agent read the
-server against the brief's failure case. The cookie was the star's id, and
-every snapshot publishes every id, so copying one let you rename that star or
-declare connections as it. I had called the app multi-user since crit 8
-because two browsers looked different; nobody had tried to be someone else.
-Identity is now a random session secret whose hash the server checks, and
-forget revokes it
+The fix uses a random session secret, with its hash checked by the server
 ([`0264917`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/0264917)).
-I chose that over signing the id, which can't be revoked, and over passwords,
-which break the README's promise that entering takes one name.
-`CLAUDE.md` now says actors come only from the session, and
-`spec/permissions.test.ts` forges the old cookie to prove it fails.
+`spec/permissions.test.ts` now tries the old forged cookie and checks that it
+fails. I considered a signed id, but wanted sessions that could be revoked.
+Passwords were another option, but I wanted joining to require only a name.
 
-## Several people at once
+## When adding more made it worse
 
-Two decisions, each defended in an ADR. **Presence is light only** (ADR 0001):
-a star glows while its owner has the sky open, with no who's-here list,
-because a list is the dashboard chrome the README keeps off the sky.
-Simultaneous declarations never conflict, because the log is append-only.
-**Everything is visible, every change is made as one star** (ADR 0002):
-timelines stay public, since a connection is a public statement, but only
-the server decides who is asking.
+The visual changes taught me the most. I thought the stars looked plain and
+asked the agent for a richer appearance. I then accepted several suggestions:
+bloom, redshift on old connections, a double helix for mutual connections,
+cluster nebulae, a targeting reticle, shockwaves and a close-up stellar surface
+([`bcf55bf`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/bcf55bf)
+to
+[`85271b1`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/85271b1)).
+The individual screenshots looked fine, but using the whole scene felt too
+busy. At first I could only say that I liked it less. I could not explain
+which changes were responsible.
 
-Every action and refusal now writes one log line naming the actor as
-`"pseudonym"#id6`, since names repeat. I kept it plain `key=value` text rather
-than JSON so it can be read aloud in the crit, and kept it out of the page:
-an in-app activity feed was the obvious next step and I dropped it, because
-the logs are for whoever runs the app, not for visitors.
+To compare properly, I had the old and new versions run with the same copy of
+the live data. The base colours were the same. The main problems were the
+helix covering the screen with waves, old connections turning pink, and purple
+fog around clusters. I removed those effects
+([`8c83b0b`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/8c83b0b)),
+then removed the blue background haze and reduced the stars' brightness
+([`74f7237`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/74f7237)).
+The brighter stars had looked cheap to me. Comparing again helped me decide
+when to stop.
 
-## The data, honestly
+I added rules to `CLAUDE.md`: connections should stay plain arcs, stars should
+stay quiet, and changes to the overall appearance need a comparison first
+([`14e224f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/14e224f)).
+Writing down the failed version made these rules more useful than simply
+asking the agent to make the site calm.
 
-The demo history was entered by me through a seed script and an owner-only
-backfill route
-([`d8fd8ca`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/d8fd8ca)),
-then spread across real approximate dates by
-`scripts/curate-demo-history.js`, dry-run and backed up first. It is the single
-recorded exception to append-only, and the README says plainly that this
-history is backfilled.
+![The same sky before the cleanup](docs/process/sky-busy.jpg)
+![The same sky after the cleanup](docs/process/sky-calm.jpg)
+
+I had a similar problem with sound. The first version made random pings,
+changed chords every fourteen seconds and used bright bells for actions. I
+found it restless. The rework
+([`5fb95ac`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/5fb95ac))
+removed random and percussive sounds and kept cues for the viewer's own
+actions. I listened locally before deploying it.
+
+The agent could implement the ideas I requested, but I still had to decide
+whether they belonged. Having “calm” in the README had not been enough to guide
+all those individual decisions.
+
+## Smaller fixes
+
+Hover jitter took three attempts
+([`5ff7e97`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/5ff7e97));
+`docs/DESIGN-NOTES.md` records why the first two failed. Running the spec
+against my preview database once added test strangers to the sky, so I added
+a rule requiring a temporary database
+([`561f3a2`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/561f3a2)).
+Presence also changed from “polled recently”, which kept stars lit for twenty
+seconds after leaving, to having an open stream
+([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)).
+ADR 0001 records that decision
+([`8b14b99`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/8b14b99)).

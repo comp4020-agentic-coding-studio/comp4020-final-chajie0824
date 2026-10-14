@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-// One-off removal of duplicate-name stars (owner-approved, 2026-10-14), done
-// when the name became the key to its star (ADR 0002 amendment). For each
-// name held by more than one star (case-insensitive), keeps the one with the
+// One-off removal of duplicate-name stars (owner-approved, 2026-10-14). For
+// each name held by more than one star (case-insensitive), keeps the one with the
 // most connections (oldest on a tie) and deletes the others together with
 // their edges, those edges' events and their sessions. Run it --dry first.
 // Usage (on the volume): node scripts/dedupe-stars.js /data/constellation.db [--dry]

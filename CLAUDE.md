@@ -19,12 +19,10 @@ rule: it is what stops the same mistake being "simplified" back in.
   appends rather than replaces).
 - **The one exception is owner-run data curation, and it never lives in app
   code.** It is a script committed under `scripts/`, run by hand on the
-  volume, dry-run first and `VACUUM INTO` backup first, and disclosed in
-  README.md ("Honest about the data"). The scripts so far:
+  volume, dry-run first and `VACUUM INTO` backup first. The scripts so far:
   `curate-demo-history.js` (real approximate dates for the backfilled demo),
-  `dedupe-stars.js` (duplicates left from before the name was the key),
-  `remove-stars.js` and `remove-edges.js` (people and connections chajie asked
-  to take out, to thin a crowded sky). Never run one against production
+  `dedupe-stars.js`, `remove-stars.js` and `remove-edges.js` (stars and
+  connections chajie asked to take out). Never run one against production
   without chajie confirming that exact run.
 - **A pseudonym is renameable (`PATCH /api/me`); a star's `id` never
   changes.** Renaming only updates the label; it must never touch
@@ -52,13 +50,6 @@ rule: it is what stops the same mistake being "simplified" back in.
   cookie is cleared, never read. This closed a real hole (copying an id made
   you that star) found by an audit before crit 10. Decision and table:
   ADR 0002; checked by `spec/permissions.test.ts`.
-- **The name is the key: `POST /api/claim` with a name already in the sky
-  enters that star (case-insensitive); it never makes a second one.** A
-  deliberate demo trade-off: anyone who knows a name can act as it. The
-  ADR 0002 amendment says why (a new browser couldn't reach its own star, so
-  duplicates piled up). Names stay unique: a colliding rename is a 409.
-  Don't reintroduce a duplicate-name prompt, and don't add a PIN or password
-  without revisiting the amendment.
 - **Every action and every refusal logs one line through `log()`, with
   `who=tag(star)` and `sid=`.** That is what `flyctl logs` is read from. A new
   write route isn't done until it logs both its success and its rejections.

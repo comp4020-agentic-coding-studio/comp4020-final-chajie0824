@@ -1087,8 +1087,7 @@ async function claim(pseudonym) {
 birthForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const pseudonym = document.getElementById("pseudonym").value;
-  // A name already in the sky enters that star (ADR 0002), so there's no
-  // duplicate prompt any more: returning plays the arrival, not a birth.
+  // returning plays the arrival, a new star plays the birth
   const { res, data } = await claim(pseudonym);
   if (res.ok) {
     // set who you are *before* the poll, or noteSpectacle announces your own

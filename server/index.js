@@ -104,6 +104,7 @@ function broadcast() {
   if (streams.size === 0) return;
   const frame = `data: ${JSON.stringify(snapshot())}\n\n`;
   for (const res of streams) res.write(frame);
+  log("broadcast", { viewers: streams.size });
 }
 
 function openStream(req, res) {
@@ -146,6 +147,8 @@ async function renderReadme() {
 <title>Constellation — about</title>
 <link rel="stylesheet" href="/style.css" />
 <style>
+  /* style.css locks html/body to the viewport for the sky; this page scrolls */
+  html, body { height: auto; overflow: auto; }
   main.readme { max-width: 44rem; margin: 3rem auto; padding: 0 1.5rem 4rem; color: #e8e6f0; }
   main.readme h1, main.readme h2 { color: #fff; }
   main.readme a { color: #9ad1ff; }
@@ -233,6 +236,8 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/state") {
+      const star = currentStar(req);
+      log("snapshot", { who: tag(star), sid: sid(parseCookies(req)[COOKIE_NAME]) });
       return send(res, 200, snapshot());
     }
 
