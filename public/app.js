@@ -1614,6 +1614,116 @@ function noteSpectacle(stars, edges) {
   knownStarIds = new Set(stars.map((s) => s.id));
   knownEventCounts = new Map(edges.map((e) => [e.id, e.eventCount]));
 }
+// Cluster nebulae: every group of 3+ people joined by connections gets a
+// faint cloud behind it, tinted by its members' spectral colours and sized
+// to how far they spread. Unlike the decorative nebula wash (fixed seed,
+// never real data), these ARE the data: the clusters that emerge from who
+// declared what, made visible. Layered sprites at a few offsets so it reads
+// as a cloud, not a disc.
+const nebulaTexture = (() => {
+  const size = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  const rand = mulberry32(7);
+  for (let k = 0; k < 14; k++) {
+    const x = size / 2 + (rand() - 0.5) * size * 0.45;
+    const y = size / 2 + (rand() - 0.5) * size * 0.45;
+    const r = size * (0.18 + rand() * 0.22);
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, "rgba(255,255,255,0.22)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, size, size);
+  }
+  // force a clean, zero-alpha edge so no square ever shows under bloom
+  const mask = g.createRadialGradient(size / 2, size / 2, size * 0.3, size / 2, size / 2, size / 2 - 1);
+  mask.addColorStop(0, "rgba(0,0,0,1)");
+  mask.addColorStop(1, "rgba(0,0,0,0)");
+  g.globalCompositeOperation = "destination-in";
+  g.fillStyle = mask;
+  g.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+})();
+const clusterCentre = new THREE.Vector3();
+const clusterClouds = new Map(); // cluster key -> {sprites, color, center, radius, a}
+function clustersOf(stars, edges) {
+  const parent = new Map(stars.map((s) => [s.id, s.id]));
+  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+  for (const e of edges) {
+    if (!parent.has(e.starA) || !parent.has(e.starB)) continue;
+    const a = find(e.starA), b = find(e.starB);
+    if (a !== b) parent.set(a, b);
+  }
+  const groups = new Map();
+  for (const s of stars) {
+    const r = find(s.id);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(s.id);
+  }
+  return [...groups.values()].filter((g) => g.length >= 3);
+}
+function stepClusterNebulae(stars, edges) {
+  const live = new Set();
+  for (const members of clustersOf(stars, edges)) {
+    // keyed by its oldest member, so a cloud survives people joining it
+    const key = members.slice().sort()[0];
+    live.add(key);
+    let cloud = clusterClouds.get(key);
+    if (!cloud) {
+      const sprites = [0, 1, 2].map((k) => {
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: nebulaTexture, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+          rotation: k * 2.1,
+        }));
+        scene.add(sp);
+        return sp;
+      });
+      cloud = { sprites, center: new THREE.Vector3(), radius: 0, a: 0, color: new THREE.Color() };
+      clusterClouds.set(key, cloud);
+    }
+    // centre and spread from the live (simulated) positions
+    const c = clusterCentre.set(0, 0, 0);
+    for (const id of members) { const p = physicsFor(id); c.x += p.x; c.y += p.y; c.z += p.z; }
+    c.divideScalar(members.length);
+    let spread = 0;
+    const mix = new THREE.Color(0, 0, 0);
+    for (const id of members) {
+      const p = physicsFor(id);
+      spread = Math.max(spread, Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z));
+      mix.add(tmpColor.setHex(styleFor(id).color.hex));
+    }
+    mix.multiplyScalar(1 / members.length);
+    // averaging spectral colours drifts toward grey-brown; push saturation
+    // back up so a cluster keeps a hue (a cool cluster blue, a warm one amber)
+    const hsl = {};
+    mix.getHSL(hsl);
+    mix.setHSL(hsl.h, Math.min(1, hsl.s * 2.2 + 0.25), 0.55);
+    cloud.center.lerp(c, cloud.a === 0 ? 1 : 0.05);
+    // capped: a sky that's mostly one cluster mustn't fog the whole screen
+    cloud.radius += ((Math.min(320, spread * 0.8 + 50)) - cloud.radius) * 0.05;
+    cloud.color.lerp(mix, 0.05);
+    cloud.a += (Math.min(1, 0.4 + members.length * 0.06) - cloud.a) * 0.02;
+    cloud.sprites.forEach((sp, k) => {
+      const off = (k - 1) * cloud.radius * 0.25;
+      sp.position.set(cloud.center.x + off, cloud.center.y - off * 0.4, cloud.center.z + off * 0.3);
+      const sc = cloud.radius * (2.2 - k * 0.35);
+      sp.scale.set(sc, sc, 1);
+      sp.material.color.copy(cloud.color);
+      sp.material.opacity = 0.022 * cloud.a * revealMul;
+    });
+  }
+  for (const [key, cloud] of clusterClouds) {
+    if (live.has(key)) continue;
+    cloud.a *= 0.94;
+    for (const sp of cloud.sprites) sp.material.opacity *= 0.94;
+    if (cloud.a < 0.01) {
+      for (const sp of cloud.sprites) { scene.remove(sp); sp.material.dispose(); }
+      clusterClouds.delete(key);
+    }
+  }
+}
+
 // Shockwaves: a shell of particles thrown out from a star and fading, for a
 // birth (big) or a level-up (smaller). One Points object per wave, freed
 // when it finishes; capped so a burst of joins can't pile up.
@@ -1889,6 +1999,7 @@ function frame(nowMs) {
 
   updateConnections(animClock, drawState.edges, focusId);
   stepShockwaves(nowMs);
+  stepClusterNebulae(drawState.stars, drawState.edges);
 
   // gravity preview while in connect-mode and hovering someone else
   if (connectMode && me && hoverStarId && hoverStarId !== me.id) {
