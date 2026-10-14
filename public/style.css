@@ -353,3 +353,43 @@ button:hover { opacity: 0.85; }
 @media (max-width: 640px) {
   #story-copy { top: auto; bottom: 4rem; transform: none; height: 13rem; }
 }
+
+/* HUD lock-on reticle: four corner brackets that close in on a focused star,
+   plus a one-line mono readout. Only exists while something is focused, so
+   it's instrumentation, not chrome on the resting sky. */
+#reticle {
+  position: fixed;
+  left: 0; top: 0;
+  z-index: 11;
+  pointer-events: none;
+  --r: 40px;
+  --rc-color: var(--accent);
+  width: 0; height: 0;
+}
+#reticle.hidden { display: none; }
+#reticle .rc {
+  position: absolute;
+  width: 11px; height: 11px;
+  border-color: var(--rc-color);
+  border-style: solid;
+  border-width: 0;
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px var(--rc-color));
+}
+#reticle .tl { left: calc(-1 * var(--r)); top: calc(-1 * var(--r)); border-left-width: 1.5px; border-top-width: 1.5px; }
+#reticle .tr { left: calc(var(--r) - 11px); top: calc(-1 * var(--r)); border-right-width: 1.5px; border-top-width: 1.5px; }
+#reticle .bl { left: calc(-1 * var(--r)); top: calc(var(--r) - 11px); border-left-width: 1.5px; border-bottom-width: 1.5px; }
+#reticle .br { left: calc(var(--r) - 11px); top: calc(var(--r) - 11px); border-right-width: 1.5px; border-bottom-width: 1.5px; }
+#reticle .rc-readout {
+  position: absolute;
+  left: 0;
+  transform: translateX(-50%);
+  top: calc(var(--r) + 6px);
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: var(--rc-color);
+  opacity: 0.8;
+  text-shadow: 0 0 6px var(--rc-color);
+}

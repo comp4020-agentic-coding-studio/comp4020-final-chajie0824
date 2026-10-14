@@ -34,6 +34,8 @@ const connectDate = document.getElementById("connect-date");
 const connectMutual = document.getElementById("connect-mutual");
 const adminBadge = document.getElementById("admin-badge");
 const hoverLabel = document.getElementById("hover-label");
+const reticle = document.getElementById("reticle");
+const reticleReadout = reticle.querySelector(".rc-readout");
 const timelinePanel = document.getElementById("timeline-panel");
 const timelineTitle = document.getElementById("timeline-title");
 const timelineList = document.getElementById("timeline-list");
@@ -1616,6 +1618,13 @@ document.fonts?.ready.then(() => { for (const node of starNodes.values()) node.l
 
 // --- main loop ---------------------------------------------------------
 let lastT = performance.now();
+// Read-only hook for the headless-Chrome checks: where a star is on screen.
+window.__debugStarScreen = (name) => {
+  const star = state.stars.find((x) => x.pseudonym === name);
+  return star ? screenPosOf(star.id, camera) : null;
+};
+let reticleFor = null, reticleSince = 0, reticleRadius = 0;
+const tmpV = new THREE.Vector3();
 let animClock = 0; // idle-motion clock; dt is clamped so a backgrounded tab doesn't lurch on return
 function frame(nowMs) {
   const dt = Math.min(0.05, (nowMs - lastT) / 1000);
@@ -1851,9 +1860,40 @@ function frame(nowMs) {
   }
 
   const labelStar = focusId ? state.stars.find((s) => s.id === focusId) : null;
+  // Reticle: brackets start wide and close onto the star over ~350ms, sized
+  // to the star's on-screen radius, tinted with its spectral colour.
+  if (labelStar && !storyMode) {
+    const s = screenPosOf(labelStar.id, camera);
+    if (reticleFor !== labelStar.id) { reticleFor = labelStar.id; reticleSince = nowMs; }
+    const lock = Math.min(1, (nowMs - reticleSince) / 350);
+    const ease = 1 - Math.pow(1 - lock, 3);
+    const node = starNodes.get(labelStar.id);
+    const p3 = physicsFor(labelStar.id);
+    const dist = camera.position.distanceTo(tmpV.set(p3.x, p3.y, p3.z));
+    const worldR = node ? node.core.scale.x * 1.6 : 8;
+    const pxR = (worldR / dist) * (window.innerHeight / (2 * Math.tan((camera.fov * Math.PI) / 360)));
+    const target = Math.max(16, Math.min(90, pxR));
+    const r = target + (1 - ease) * 60;
+    const style = styleFor(labelStar.id);
+    reticle.style.transform = `translate(${s.x}px, ${s.y}px) rotate(${(1 - ease) * 45}deg)`;
+    reticle.style.setProperty("--r", `${r}px`);
+    reticle.style.setProperty("--rc-color", `rgb(${style.color.glow})`);
+    reticle.style.opacity = String(0.3 + 0.7 * ease);
+    const deg = (state.edges.filter((e) => e.starA === labelStar.id || e.starB === labelStar.id)).length;
+    reticleReadout.textContent = lock < 1
+      ? "ACQUIRING…"
+      : `LOCK · ${style.color.cls}-${TIERS[tierFor(deg)].name.toUpperCase()}`;
+    reticle.classList.toggle("hidden", s.behind);
+    reticleRadius = r;
+  } else {
+    reticleFor = null;
+    reticleRadius = 0;
+    reticle.classList.add("hidden");
+  }
   if (labelStar) {
     const s = screenPosOf(labelStar.id, camera);
-    hoverLabel.style.left = `${s.x + 18}px`;
+    // sits outside the reticle's right edge so it never covers the brackets
+    hoverLabel.style.left = `${s.x + Math.max(18, reticleRadius + 14)}px`;
     hoverLabel.style.top = `${s.y - 10}px`;
     hoverLabel.innerHTML = starInfoHtml(labelStar);
     hoverLabel.classList.toggle("hidden", s.behind);
