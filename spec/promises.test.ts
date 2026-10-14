@@ -12,8 +12,8 @@ async function post(path: string, body: unknown, cookie?: string) {
     body: JSON.stringify(body),
   });
 }
-async function claim(pseudonym: string, confirmDuplicate = false) {
-  const res = await post("/api/claim", { pseudonym, confirmDuplicate });
+async function claim(pseudonym: string) {
+  const res = await post("/api/claim", { pseudonym });
   expect(res.status).toBe(200);
   return { res, data: await res.json(), cookie: res.headers.get("set-cookie")?.split(";")[0] };
 }
@@ -44,14 +44,12 @@ it("forgetting a star unlinks the browser but never deletes the star", async () 
   expect(still, "the old star stays in the sky").toBe(true);
 });
 
-it("claiming a name that's taken is a gentle warning, not a block or a merge", async () => {
+it("typing a name that's already in the sky enters that star, never a second one", async () => {
   const name = `spec-dup-${suffix()}`;
   const first = await claim(name);
-  const warned = await claim(name);
-  expect(warned.data, "first attempt only warns").toEqual({ duplicate: true });
-  expect(warned.cookie, "and creates nothing").toBeFalsy();
-  const second = await claim(name, true);
-  expect(second.data.star.id, "confirming creates a separate star").not.toBe(first.data.star.id);
-  const named = (await state()).stars.filter((s: { pseudonym: string }) => s.pseudonym === name);
-  expect(named).toHaveLength(2);
+  const again = await claim(name.toUpperCase());
+  expect(again.data.returning, "the second claim is a return").toBe(true);
+  expect(again.data.star.id, "and lands on the same star").toBe(first.data.star.id);
+  const named = (await state()).stars.filter((s: { pseudonym: string }) => s.pseudonym.toLowerCase() === name);
+  expect(named).toHaveLength(1);
 });

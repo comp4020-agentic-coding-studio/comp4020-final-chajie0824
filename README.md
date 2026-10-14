@@ -1,7 +1,7 @@
 # Constellation
 
-Everyone who opens this is a star. Type a name once — the browser remembers
-it, no account — and your star kindles in the dark before the camera pulls
+Everyone who opens this is a star. Type a name — no account; type the same
+name in any browser to come back to it — and your star kindles in the dark before the camera pulls
 back to show who's already here. Click your star, then someone else's, and
 say what happened: *we know each other*, *we worked together*, *we hung out*.
 Each declaration is one event on the line between you.
@@ -41,7 +41,8 @@ open on a screen in a room.
 No chat, profiles, avatars, likes, follower counts, notifications or friend
 requests — each turns a sky into a feed. You can't drag your own star or
 delete history. "Forget this star" unlinks the browser but leaves the old star
-in the sky. Taking a name that's in use gets a gentle question, not a block.
+in the sky. There are no passwords: a name is the key to its star, a trade-off made
+on purpose for a sky shown in a room.
 Timelines are public to everyone looking, because this is meant to be shown
 to a room.
 
@@ -50,7 +51,7 @@ to a room.
 Enforced by `spec/` against the running app: a declared connection persists
 and reads as one-sided until the other person declares back; declaring again
 appends rather than replaces; forgetting never deletes a star; a taken name
-warns rather than blocks; a new star or declaration reaches an open sky within
+enters that star rather than making a second; a new star or declaration reaches an open sky within
 a second; a star is lit exactly while its owner has the sky open. Judged, not tested: whether it feels alive, calm and
 legible. I judged those by using it, and by having the agent drive a headless
 browser through every flow and read back screenshots — which is how a
@@ -62,6 +63,4 @@ jumping Story camera and an invisible star mid-transition were caught.
 The early sky is real people, but its history was backfilled by me from
 memory: who I met when and roughly how often, entered with approximate dates
 spread across days. Everything declared on the live site since is exactly as
-it happened. Changes are pushed to every open sky as they happen, and a star
-glows only while its owner actually has the sky open — presence is light, not
-a list (see `docs/adr/0001-multi-user-behaviour.md`).
+it happened.

@@ -45,8 +45,14 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   cleared, never read. Decision and table of who can do what:
   `docs/adr/0002-who-can-see-and-change-what.md`; checked by
   `spec/permissions.test.ts`.
+- **The name is the key: `POST /api/claim` with a name already in the sky
+  enters that star (case-insensitive), it never makes a second one.** This is
+  a deliberate demo trade-off — anyone who knows a name can act as it — and
+  the ADR 0002 amendment says why. So names must stay unique: a rename that
+  collides is a 409. Don't reintroduce a duplicate-name prompt, and don't add
+  a PIN or password without revisiting the amendment.
 - **Every action and every refusal logs one line through `log()`, with
-  `who=tag(star)`.** That's what `flyctl logs` is read from at the crit and
+  `who=tag(star)` and `sid=`.** That's what `flyctl logs` is read from at the crit and
   afterwards. A new write route isn't done until it logs both its success and
   its rejections. Keep lines short `key=value` text (readable aloud), never
   log the session token, and don't add an in-app activity feed — the logs are
@@ -103,14 +109,6 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   it's not literally an `edge_events` edit — so the old star just stays in
   the sky, now un-owned by any browser, and the birth screen reappears for a
   brand new one.
-- **Claiming an already-used pseudonym gets a gentle confirm, never a hard
-  reject or a silent merge.** Because "forget" never deletes the old star,
-  reusing a name after a reset will always collide with the star you just
-  orphaned — and two unrelated people can legitimately share a name anyway.
-  `POST /api/claim` responds `200 { duplicate: true }` unless the request
-  carries `confirmDuplicate: true`; the client shows one `confirm()` asking
-  whether this is the same person coming back or someone else, then
-  resubmits to actually create it. No automatic rename, no identity merging.
 
 ## Stack, briefly
 

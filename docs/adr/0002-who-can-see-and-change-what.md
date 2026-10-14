@@ -1,6 +1,7 @@
 # ADR 0002: Who can see and change what
 
-- Status: accepted, crit 10 (week 11)
+- Status: accepted, crit 10 (week 11); amended the same week — see
+  "Amendment: the name is the key" below
 - Decided by: chajie
 
 ## Context
@@ -106,3 +107,51 @@ The brief asks me to narrate from them in real time, so each line is short
 - `spec/permissions.test.ts` checks that the cookie isn't the id, that a
   forged `star_id` can't rename or connect, that renaming only touches your
   own star, and that forget revokes a copied cookie.
+
+## Amendment: the name is the key
+
+The first version above kept "clearing cookies means a new star". Using it
+straight after the deploy, that was the worst part: my own star, with twelve
+connections, was unreachable from any new browser, and the only way back
+was a fresh, empty star with the same name. Two people (`CHAJIE ZHOU`,
+`seong`) already had duplicates for exactly that reason.
+
+So I changed it: **typing a name that is already in the sky enters that
+star.** Matching ignores case. There is no longer a duplicate prompt, and a
+rename that would collide with another star's name is refused (409), so
+names stay unique from here on. The existing duplicates were removed by an
+owner-run script (`scripts/dedupe-stars.js`), keeping the better-connected
+star in each pair.
+
+**What this gives up, deliberately.** Anyone who knows your name can now act
+as you. That is the brief's failure case, and I'm accepting it for this app
+because:
+
+- It is a demo sky for a class and a few friends, shown in a room. The
+  names in it are already public, and what someone could do "as you" is
+  declare a connection or rename you — both visible to everyone and both
+  logged.
+- The README promises entering takes one name. Recovering your star in a
+  new browser is the common case; impersonation in a room where everyone
+  can see the screen is not.
+- A PIN or recovery code was offered and rejected as friction at the door
+  of the one flow every visitor goes through.
+
+**What still holds.** The session is still a server-side secret, never the
+id: knowing someone's id from a snapshot still gets you nothing, and forget
+still revokes a copied cookie. Every entry mints its own session, and the
+log now carries a 4-character `sid` per browser, so two people who typed
+the same name still read as two distinct lines:
+
+```
+08:12:44.992Z connect    who="Mira"#fe2e76 sid=0fe2 to="Sat 1"#8699fc type=hung_out
+08:12:44.995Z enter      who="Sat 2"#68983b sid=d2c0
+```
+
+The table above changes in one cell: "Declare a connection from this star"
+and "Rename this star" are open to **whoever types its name**, not only to
+the browser that first claimed it. Nothing else changes, and nothing can
+edit or delete a past declaration.
+
+If the sky were ever used beyond a room of people who know each other, the
+first thing to add back would be a per-star PIN, checked in `/api/claim`.

@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { marked } from "marked";
 import {
@@ -7,7 +8,7 @@ import {
   createSession,
   getSessionStar,
   deleteSession,
-  pseudonymExists,
+  findStarByPseudonym,
   touchStar,
   renameStar,
   declareConnection,
@@ -75,6 +76,12 @@ function tag(star) {
   return star ? `${JSON.stringify(star.pseudonym)}#${star.id.slice(0, 6)}` : "anon";
 }
 
+// A short, non-reversible label for one browser's session, so two people
+// entering the same star still read as two lines in the log.
+function sid(token) {
+  return token ? createHash("sha256").update(token).digest("hex").slice(0, 4) : undefined;
+}
+
 function log(event, fields) {
   const parts = Object.entries(fields)
     .filter(([, v]) => v !== undefined && v !== null && v !== "")
@@ -108,14 +115,14 @@ function openStream(req, res) {
   });
   res.write("retry: 2000\n\n");
   streams.add(res);
-  log("open", { who: tag(star), viewers: streams.size });
+  log("open", { who: tag(star), sid: sid(parseCookies(req)[COOKIE_NAME]), viewers: streams.size });
   if (star) openStreamsByStar.set(star.id, (openStreamsByStar.get(star.id) ?? 0) + 1);
   // Fly's proxy drops idle connections, so keep a comment line flowing.
   const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 20_000);
   req.on("close", () => {
     clearInterval(keepAlive);
     streams.delete(res);
-    log("close", { who: tag(star), viewers: streams.size });
+    log("close", { who: tag(star), sid: sid(parseCookies(req)[COOKIE_NAME]), viewers: streams.size });
     if (star) {
       const left = (openStreamsByStar.get(star.id) ?? 1) - 1;
       if (left > 0) openStreamsByStar.set(star.id, left);
@@ -194,7 +201,7 @@ const server = createServer(async (req, res) => {
         `${COOKIE_NAME}=; ${COOKIE_ATTRS}; Max-Age=0`,
         `${LEGACY_COOKIE}=; ${COOKIE_ATTRS}; Max-Age=0`,
       ]);
-      log("forget", { who: tag(star) });
+      log("forget", { who: tag(star), sid: sid(parseCookies(req)[COOKIE_NAME]) });
       return send(res, 200, { ok: true });
     }
 
@@ -204,28 +211,24 @@ const server = createServer(async (req, res) => {
         log("reject", { who: tag(already), action: "claim", reason: "already has a star" });
         return send(res, 400, { error: "already claimed a star in this browser" });
       }
-      const { pseudonym, confirmDuplicate } = await readJsonBody(req);
+      const { pseudonym } = await readJsonBody(req);
       const name = String(pseudonym ?? "").trim().slice(0, 40);
       if (!name) {
         log("reject", { who: "anon", action: "claim", reason: "empty pseudonym" });
         return send(res, 400, { error: "pseudonym can't be empty" });
       }
-      // A gentle, non-blocking heads-up when the name is already in the sky —
-      // never a hard reject (two different people can share a name, and
-      // "forget" never deletes the old star either — see CLAUDE.md). The
-      // client shows a confirm prompt once and resubmits with
-      // confirmDuplicate:true to proceed past this check.
-      if (!confirmDuplicate && pseudonymExists(name)) {
-        return send(res, 200, { duplicate: true });
-      }
-      const star = createStar(name);
+      // Typing a name that's already in the sky enters that star instead of
+      // making a second one: the name is the key (ADR 0002). Each entry
+      // still gets its own session, so the logs tell two browsers apart.
+      const existing = findStarByPseudonym(name);
+      const star = existing ?? createStar(name);
       const token = createSession(star.id);
       res.setHeader("set-cookie", [
         `${COOKIE_NAME}=${token}; ${COOKIE_ATTRS}; Max-Age=31536000`,
         `${LEGACY_COOKIE}=; ${COOKIE_ATTRS}; Max-Age=0`,
       ]);
-      log("claim", { who: tag(star) });
-      send(res, 200, { star: { id: star.id, pseudonym: star.pseudonym } });
+      log(existing ? "enter" : "claim", { who: tag(star), sid: sid(token) });
+      send(res, 200, { star: { id: star.id, pseudonym: star.pseudonym }, returning: !!existing });
       return broadcast();
     }
 
@@ -247,11 +250,11 @@ const server = createServer(async (req, res) => {
       const target = getStar(String(to ?? ""));
       try {
         const edge = declareConnection(star.id, to, type, occurredOn, note);
-        log("connect", { who: tag(star), to: tag(target), type, on: occurredOn, edge: edge.id.slice(0, 6) });
+        log("connect", { who: tag(star), sid: sid(parseCookies(req)[COOKIE_NAME]), to: tag(target), type, on: occurredOn, edge: edge.id.slice(0, 6) });
         send(res, 200, { edge });
         return broadcast();
       } catch (err) {
-        log("reject", { who: tag(star), action: "connect", to: target ? tag(target) : String(to ?? ""), reason: err.message });
+        log("reject", { who: tag(star), action: "connect", sid: sid(parseCookies(req)[COOKIE_NAME]), to: target ? tag(target) : String(to ?? ""), reason: err.message });
         return send(res, 400, { error: err.message });
       }
     }
@@ -284,8 +287,13 @@ const server = createServer(async (req, res) => {
       const { pseudonym } = await readJsonBody(req);
       const name = String(pseudonym ?? "").trim().slice(0, 40);
       if (!name) return send(res, 400, { error: "pseudonym can't be empty" });
+      const holder = findStarByPseudonym(name);
+      if (holder && holder.id !== star.id) {
+        log("reject", { who: tag(star), action: "rename", sid: sid(parseCookies(req)[COOKIE_NAME]), reason: "name taken" });
+        return send(res, 409, { error: "that name is already a star in this sky" });
+      }
       const updated = renameStar(star.id, name);
-      log("rename", { who: tag(star), to: JSON.stringify(name) });
+      log("rename", { who: tag(star), sid: sid(parseCookies(req)[COOKIE_NAME]), to: JSON.stringify(name) });
       send(res, 200, { star: { id: updated.id, pseudonym: updated.pseudonym } });
       return broadcast();
     }

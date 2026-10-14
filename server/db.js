@@ -93,8 +93,16 @@ export function deleteSession(token) {
   db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
 }
 
-export function pseudonymExists(pseudonym) {
-  return !!db.prepare("SELECT 1 FROM stars WHERE pseudonym = ?").get(pseudonym);
+// A name is the key to its star (demo trade-off, ADR 0002): matching is
+// case-insensitive, and if duplicates predate this rule the best-connected
+// one wins.
+export function findStarByPseudonym(pseudonym) {
+  return db.prepare(`
+    SELECT s.* FROM stars s
+    WHERE s.pseudonym = ? COLLATE NOCASE
+    ORDER BY (SELECT COUNT(*) FROM edges e WHERE e.star_a = s.id OR e.star_b = s.id) DESC, s.created_at
+    LIMIT 1
+  `).get(pseudonym) ?? null;
 }
 
 export function touchStar(id) {

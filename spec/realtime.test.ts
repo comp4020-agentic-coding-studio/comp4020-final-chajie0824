@@ -61,7 +61,7 @@ async function claim(pseudonym: string) {
   const res = await fetch(new URL("/api/claim", baseUrl), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pseudonym, confirmDuplicate: true }),
+    body: JSON.stringify({ pseudonym }),
   });
   const data = await res.json();
   return { id: data.star.id as string, cookie: res.headers.get("set-cookie")!.split(";")[0] };

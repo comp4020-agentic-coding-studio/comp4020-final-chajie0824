@@ -1,9 +1,9 @@
 import { expect, inject, it } from "vitest";
 
 // Who may change what, checked on the server: a browser acts only as the star
-// its session secret belongs to. Star ids are public in every snapshot, so
-// knowing one must never be enough to act as it. Decision:
-// docs/adr/0002-who-can-see-and-change-what.md.
+// its session belongs to, and a session comes only from typing that star's
+// name. Star ids are public in every snapshot, so knowing one must never be
+// enough to act as it. Decision: docs/adr/0002-who-can-see-and-change-what.md.
 const baseUrl = inject("baseUrl");
 const suffix = () => Math.random().toString(36).slice(2, 8);
 
@@ -15,7 +15,7 @@ async function call(method: string, path: string, body: unknown, cookie?: string
   });
 }
 async function claim(pseudonym: string) {
-  const res = await call("POST", "/api/claim", { pseudonym, confirmDuplicate: true });
+  const res = await call("POST", "/api/claim", { pseudonym });
   const data = await res.json();
   const cookie = res.headers.getSetCookie().find((c) => c.startsWith("session="))!.split(";")[0];
   return { id: data.star.id as string, cookie };
@@ -48,6 +48,14 @@ it("renaming only ever changes your own star", async () => {
   expect((await call("PATCH", "/api/me", { pseudonym: `spec-ren-a2-${s}` }, a.cookie)).status).toBe(200);
   expect(await pseudonymOf(a.id)).toBe(`spec-ren-a2-${s}`);
   expect(await pseudonymOf(b.id), "b is untouched").toBe(`spec-ren-b-${s}`);
+});
+
+it("you can't rename into someone else's name", async () => {
+  const s = suffix();
+  const a = await claim(`spec-taken-a-${s}`);
+  await claim(`spec-taken-b-${s}`);
+  expect((await call("PATCH", "/api/me", { pseudonym: `spec-taken-b-${s}` }, a.cookie)).status).toBe(409);
+  expect(await pseudonymOf(a.id)).toBe(`spec-taken-a-${s}`);
 });
 
 it("forgetting revokes the session on the server, not just in the browser", async () => {

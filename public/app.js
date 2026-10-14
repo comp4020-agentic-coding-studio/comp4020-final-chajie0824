@@ -932,11 +932,11 @@ async function refreshMe() {
   }
 }
 
-async function claim(pseudonym, confirmDuplicate) {
+async function claim(pseudonym) {
   const res = await fetch("/api/claim", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pseudonym, confirmDuplicate }),
+    body: JSON.stringify({ pseudonym }),
   });
   return { res, data: await res.json() };
 }
@@ -944,17 +944,9 @@ async function claim(pseudonym, confirmDuplicate) {
 birthForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const pseudonym = document.getElementById("pseudonym").value;
-  let { res, data } = await claim(pseudonym, false);
-  if (res.ok && data.duplicate) {
-    // Gentle heads-up, not a hard block: a reused name after "forget" (or
-    // two different people sharing a name) both land here. No forced
-    // rename, no merging — just make sure it's a deliberate choice.
-    const proceed = confirm(
-      `"${pseudonym.trim()}" is already a star in this sky. Is that you coming back, or someone else with the same name? Either way, continuing creates a new star.`,
-    );
-    if (!proceed) return;
-    ({ res, data } = await claim(pseudonym, true));
-  }
+  // A name already in the sky enters that star (ADR 0002), so there's no
+  // duplicate prompt any more: returning plays the arrival, not a birth.
+  const { res, data } = await claim(pseudonym);
   if (res.ok) {
     // set who you are *before* the poll, or noteSpectacle announces your own
     // new star as "X joined the sky" — a giant, cut-off label at birth range
