@@ -80,9 +80,13 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   audio files, no library.** The ambient bed and every cue go through one
   master gain behind the `sound` toggle (a `localStorage` viewer preference
   like `animate`, never gating a feature). Nothing plays before the first
-  click or key press. Cues stay short and in the pentatonic scale so they
-  can overlap without clashing; a star's own note comes from its spectral
-  class. A new static file must also be added to the server's whitelist in
+  click or key press. The register is calm and far away: the bed is a drone,
+  a slow pad (a chord change every ~30 s) and faint noise, with **nothing
+  random or percussive in it** — a first version with random "starlight"
+  pings, fast chord changes and glassy bell cues read to chajie as restless
+  and noisy. Only the viewer's own actions make a sound (focus, connect,
+  travel, enter); hover and other people's activity stay silent. Cues are
+  soft sine swells under a low-pass, never a sharp attack. A new static file must also be added to the server's whitelist in
   `server/index.js`.
 - **A star's look has two sources and they must not mix: colour (spectral
   class) comes from its id, structure and size (magnitude tier) come from its

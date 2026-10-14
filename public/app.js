@@ -895,7 +895,6 @@ function updateHover(e) {
   const id = star ? star.id : null;
   if (id === hoverStarId) return;
   if (id) {
-    sfx.hover(clsOf(id));
     hoverSince = performance.now();
     hoverAnchor = screenPosOf(id, camera);
   } else {
@@ -1133,7 +1132,6 @@ function openConnectPanel(star, adminFromStarId) {
     connectMutual.checked = true;
   }
   connectPanel.classList.remove("hidden");
-  sfx.panel();
 }
 connectCancel.addEventListener("click", () => {
   connectPanel.classList.add("hidden");
@@ -1554,7 +1552,6 @@ function noteSpectacle(stars, edges) {
     for (const s of stars) {
       if (knownStarIds.has(s.id)) continue;
       spawnShockwave(s.id, true);
-      if (!(me && s.id === me.id)) sfx.newStar();
       if (!(me && s.id === me.id)) spawnSpectacleLabel(s.id, `${s.pseudonym} joined the sky`);
     }
   }
@@ -1568,7 +1565,6 @@ function noteSpectacle(stars, edges) {
       }
       const from = e.events?.[newestEventIndex(e.events)]?.declaredBy;
       if (from && !(me && from === me.id)) {
-        sfx.otherConnect();
         beginTravel(from, from === e.starA ? e.starB : e.starA);
       }
     }
@@ -1821,7 +1817,6 @@ function frame(nowMs) {
     if (node.tier >= 0 && tier > node.tier && !historyMode) {
       node.levelUpAt = nowMs;
       spawnShockwave(star.id, tier === TIERS.length - 1);
-      sfx.levelUp();
     }
     node.tier = tier;
     if (node.tierF < 0) node.tierF = tier;

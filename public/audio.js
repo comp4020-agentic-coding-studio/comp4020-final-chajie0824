@@ -1,23 +1,27 @@
 // Sound for the sky, synthesised live with the Web Audio API: no audio files,
-// no library, nothing to license or download. One slow ambient bed (a drifting
-// pad plus sparse high "starlight" notes) and a short cue per action. All of
-// it goes through one master gain, so the sound toggle is a single fade.
-// Browsers only allow audio after a user gesture, so nothing plays until the
-// first click or key press.
+// no library, nothing to license or download. The register is warm, slow and
+// far away (think of the calm stretches of a space-builder soundtrack): a
+// low drone, a soft pad that changes chord only every half minute or so, and
+// a faint wash of "space air". Nothing in the bed is percussive or random, so
+// it never pings on its own. Action cues are soft sine swells, rounded off by
+// a low-pass filter — felt more than heard. Everything goes through one
+// master gain, so the sound toggle is a single fade. Browsers only allow
+// audio after a user gesture, so nothing plays until the first click or key.
 
-const SCALE = [0, 2, 4, 7, 9]; // major pentatonic: any two notes sound fine together
-const ROOT = 146.83; // D3
-const CHORDS = [
-  [0, 7, 14, 16, 23], // D add9
-  [-3, 4, 11, 14, 19], // B minor 7
-  [-5, 2, 9, 14, 21], // G add9
-  [-1, 6, 13, 16, 21], // A sus
-];
+const ROOT = 73.42; // D2
 const hz = (semi) => ROOT * Math.pow(2, semi / 12);
+// two open, consonant voicings over the same D pedal: no minor, no tension
+const CHORDS = [
+  [12, 19, 26, 28], // D  A  E  F#  — D add9
+  [10, 17, 24, 26], // C  G  D  E   — C add9 over D: a lift, not a turn
+];
+const CHORD_SECONDS = 34;
+const GLIDE_SECONDS = 9;
 
 let ctx = null, master = null, sfxBus = null, musicBus = null, reverb = null;
 let enabled = true;
 let started = false;
+const LEVEL = 0.7;
 
 try {
   const saved = localStorage.getItem("constellation:sound");
@@ -30,15 +34,15 @@ export function setSoundEnabled(on) {
   enabled = on;
   try { localStorage.setItem("constellation:sound", on ? "1" : "0"); } catch {}
   if (on) unlock();
-  if (master) master.gain.setTargetAtTime(on ? 0.9 : 0, ctx.currentTime, 0.4);
+  if (master) master.gain.setTargetAtTime(on ? LEVEL : 0, ctx.currentTime, 0.8);
 }
 
-function impulse(seconds, decay) {
+function noiseBuffer(seconds, decay = 0) {
   const len = Math.floor(ctx.sampleRate * seconds);
   const buf = ctx.createBuffer(2, len, ctx.sampleRate);
   for (let c = 0; c < 2; c++) {
     const d = buf.getChannelData(c);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (decay ? Math.pow(1 - i / len, decay) : 1);
   }
   return buf;
 }
@@ -53,176 +57,172 @@ export function unlock() {
     master = ctx.createGain();
     master.gain.value = 0;
     master.connect(ctx.destination);
+    // long, dark hall: everything sits a long way off
     reverb = ctx.createConvolver();
-    reverb.buffer = impulse(4.5, 2.6);
+    reverb.buffer = noiseBuffer(6, 3);
+    const tone = ctx.createBiquadFilter();
+    tone.type = "lowpass";
+    tone.frequency.value = 2400;
     const wet = ctx.createGain();
-    wet.gain.value = 0.55;
-    reverb.connect(wet).connect(master);
+    wet.gain.value = 0.6;
+    reverb.connect(tone).connect(wet).connect(master);
     musicBus = ctx.createGain();
-    musicBus.gain.value = 0.32;
+    musicBus.gain.value = 0.22;
     musicBus.connect(master);
     musicBus.connect(reverb);
     sfxBus = ctx.createGain();
-    sfxBus.gain.value = 0.5;
+    sfxBus.gain.value = 0.28;
     sfxBus.connect(master);
     sfxBus.connect(reverb);
   }
   if (ctx.state === "suspended") ctx.resume();
-  master.gain.setTargetAtTime(0.9, ctx.currentTime, 1.2);
+  // a slow fade in, so the first click doesn't switch a room on
+  master.gain.setTargetAtTime(LEVEL, ctx.currentTime, 2.5);
   if (!started) { started = true; startMusic(); }
 }
 for (const ev of ["pointerdown", "keydown"]) window.addEventListener(ev, unlock, { capture: true });
 
 // --- ambient bed ------------------------------------------------------------
 function startMusic() {
+  const t0 = ctx.currentTime;
+
+  // drone: the root, very low and steady
+  const drone = ctx.createGain();
+  drone.gain.value = 0.28;
+  drone.connect(musicBus);
+  for (const [semi, cents] of [[0, -3], [0, 3], [7, 0]]) {
+    const o = ctx.createOscillator();
+    o.type = "sine";
+    o.frequency.value = hz(semi);
+    o.detune.value = cents;
+    o.connect(drone);
+    o.start();
+  }
+
+  // pad: soft sawtooth through a dark filter that breathes over ~50 s
   const pad = ctx.createGain();
-  pad.gain.value = 0;
+  pad.gain.setValueAtTime(0, t0);
+  pad.gain.linearRampToValueAtTime(0.12, t0 + 12);
   const lp = ctx.createBiquadFilter();
   lp.type = "lowpass";
-  lp.frequency.value = 900;
-  lp.Q.value = 0.4;
+  lp.frequency.value = 520;
+  lp.Q.value = 0.3;
   pad.connect(lp).connect(musicBus);
-  // the filter breathes slowly, so the pad never sits completely still
   const lfo = ctx.createOscillator();
   const lfoAmt = ctx.createGain();
-  lfo.frequency.value = 0.035;
-  lfoAmt.gain.value = 380;
+  lfo.frequency.value = 0.02;
+  lfoAmt.gain.value = 140;
   lfo.connect(lfoAmt).connect(lp.frequency);
   lfo.start();
-  pad.gain.setTargetAtTime(0.5, ctx.currentTime, 3);
 
-  // five voices, each two slightly detuned oscillators, gliding to the next chord
-  const voices = CHORDS[0].map((semi, i) => {
+  const voices = CHORDS[0].map((semi) => {
     const g = ctx.createGain();
-    g.gain.value = i === 0 ? 0.32 : 0.16;
+    g.gain.value = 0.25;
     g.connect(pad);
-    const oscs = [-6, 6].map((cents) => {
+    return [-5, 5].map((cents) => {
       const o = ctx.createOscillator();
-      o.type = i === 0 ? "sine" : "triangle";
+      o.type = "sawtooth";
       o.frequency.value = hz(semi);
       o.detune.value = cents;
       o.connect(g);
       o.start();
       return o;
     });
-    return oscs;
   });
   let chord = 0;
   setInterval(() => {
     chord = (chord + 1) % CHORDS.length;
     const t = ctx.currentTime;
     CHORDS[chord].forEach((semi, i) => {
-      for (const o of voices[i]) o.frequency.setTargetAtTime(hz(semi), t, 2.5);
+      for (const o of voices[i]) o.frequency.setTargetAtTime(hz(semi), t, GLIDE_SECONDS / 3);
     });
-  }, 14000);
+  }, CHORD_SECONDS * 1000);
 
-  // sparse starlight: a soft high note every few seconds, from the scale
-  const sparkle = () => {
-    if (enabled) {
-      const semi = 24 + SCALE[Math.floor(Math.random() * SCALE.length)] + 12 * Math.floor(Math.random() * 2);
-      bell(hz(semi), { gain: 0.05, decay: 3.5, bus: musicBus, pan: Math.random() * 1.6 - 0.8 });
-    }
-    setTimeout(sparkle, 2500 + Math.random() * 5000);
-  };
-  setTimeout(sparkle, 3000);
+  // space air: filtered noise, barely there, slowly swelling
+  const air = ctx.createBufferSource();
+  air.buffer = noiseBuffer(8);
+  air.loop = true;
+  const airLp = ctx.createBiquadFilter();
+  airLp.type = "lowpass";
+  airLp.frequency.value = 380;
+  const airG = ctx.createGain();
+  airG.gain.value = 0.05;
+  const airLfo = ctx.createOscillator();
+  const airAmt = ctx.createGain();
+  airLfo.frequency.value = 0.013;
+  airAmt.gain.value = 0.03;
+  airLfo.connect(airAmt).connect(airG.gain);
+  airLfo.start();
+  air.connect(airLp).connect(airG).connect(musicBus);
+  air.start();
 }
 
-// --- voices -----------------------------------------------------------------
-function bell(freq, { gain = 0.2, decay = 2, when = 0, bus = sfxBus, pan = 0, type = "sine" } = {}) {
+// --- cues -------------------------------------------------------------------
+// A soft tone: sine partials, slow attack, long gentle tail, low-passed so
+// there is no click and no glassy edge.
+function tone(freqs, { gain = 0.1, attack = 0.08, decay = 1.8, when = 0, cutoff = 1400 } = {}) {
   if (!ctx || !enabled) return;
   const t = ctx.currentTime + when;
   const g = ctx.createGain();
   g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(gain, t + 0.01);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
-  const p = ctx.createStereoPanner();
-  p.pan.value = pan;
-  g.connect(p).connect(bus);
-  // a fundamental plus a quiet inharmonic partial reads as glass, not beep
-  for (const [mult, amp] of [[1, 1], [2.76, 0.25], [5.4, 0.08]]) {
+  g.gain.linearRampToValueAtTime(gain, t + attack);
+  g.gain.setTargetAtTime(0, t + attack, decay / 4);
+  const lp = ctx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = cutoff;
+  g.connect(lp).connect(sfxBus);
+  for (const f of freqs) {
     const o = ctx.createOscillator();
-    const og = ctx.createGain();
-    o.type = type;
-    o.frequency.value = freq * mult;
-    og.gain.value = amp;
-    o.connect(og).connect(g);
+    o.type = "sine";
+    o.frequency.value = f;
+    o.connect(g);
     o.start(t);
-    o.stop(t + decay + 0.1);
+    o.stop(t + attack + decay + 0.5);
   }
 }
 
-function whoosh({ dur = 1.6, from = 300, to = 2400, gain = 0.12 } = {}) {
+function breath({ dur = 2.4, centre = 700, gain = 0.05 } = {}) {
   if (!ctx || !enabled) return;
   const t = ctx.currentTime;
   const src = ctx.createBufferSource();
-  src.buffer = impulse(dur, 0); // flat white noise
+  src.buffer = noiseBuffer(dur);
   const bp = ctx.createBiquadFilter();
   bp.type = "bandpass";
-  bp.Q.value = 1.2;
-  bp.frequency.setValueAtTime(from, t);
-  bp.frequency.exponentialRampToValueAtTime(to, t + dur * 0.6);
-  bp.frequency.exponentialRampToValueAtTime(from, t + dur);
+  bp.Q.value = 0.7;
+  bp.frequency.setValueAtTime(centre * 0.6, t);
+  bp.frequency.linearRampToValueAtTime(centre, t + dur * 0.5);
+  bp.frequency.linearRampToValueAtTime(centre * 0.6, t + dur);
   const g = ctx.createGain();
   g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(gain, t + dur * 0.4);
+  g.gain.linearRampToValueAtTime(gain, t + dur * 0.45);
   g.gain.linearRampToValueAtTime(0, t + dur);
   src.connect(bp).connect(g).connect(sfxBus);
   src.start(t);
 }
 
-function swell(freq, { dur = 2.5, gain = 0.15 } = {}) {
-  if (!ctx || !enabled) return;
-  const t = ctx.currentTime;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(gain, t + dur * 0.35);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  g.connect(sfxBus);
-  for (const mult of [1, 1.5, 2]) {
-    const o = ctx.createOscillator();
-    o.type = "sine";
-    o.frequency.setValueAtTime(freq * mult * 0.98, t);
-    o.frequency.linearRampToValueAtTime(freq * mult, t + dur * 0.5);
-    o.connect(g);
-    o.start(t);
-    o.stop(t + dur + 0.1);
-  }
-}
-
-// A star's own note: its spectral class picks a scale degree, so every star
-// has a pitch of its own and hotter stars sit higher.
+// A star's own note: its spectral class picks a degree of the pentatonic
+// scale an octave above the pad, so hotter stars sit a little higher.
+const PENTA = [0, 2, 4, 7, 9];
 const CLASS_DEGREE = { M: 0, K: 1, G: 2, F: 3, A: 4, B: 5, O: 6 };
 function noteFor(cls) {
   const d = CLASS_DEGREE[cls] ?? 2;
-  return hz(12 + SCALE[d % 5] + 12 * Math.floor(d / 5));
+  return hz(24 + PENTA[d % 5] + 12 * Math.floor(d / 5));
 }
 
-let lastHover = 0;
+// Only the viewer's own actions make a sound. Hovering is silent (it fires
+// too often to be quiet), and other people's activity stays visual only.
 export const sfx = {
-  hover(cls) {
-    const now = performance.now();
-    if (now - lastHover < 120) return;
-    lastHover = now;
-    bell(noteFor(cls) * 2, { gain: 0.035, decay: 0.6 });
-  },
-  focus(cls) {
-    bell(noteFor(cls), { gain: 0.16, decay: 2.4 });
-    bell(noteFor(cls) * 1.5, { gain: 0.07, decay: 2, when: 0.09 });
-  },
+  focus(cls) { tone([noteFor(cls)], { gain: 0.09, attack: 0.12, decay: 2.4, cutoff: 1100 }); },
   connectMode(on) {
-    if (on) { bell(hz(12), { gain: 0.1, decay: 1.2 }); bell(hz(19), { gain: 0.1, decay: 1.4, when: 0.08 }); }
-    else bell(hz(7), { gain: 0.08, decay: 0.9 });
+    if (on) tone([hz(24), hz(31)], { gain: 0.06, attack: 0.15, decay: 1.6, cutoff: 1000 });
   },
   connect() {
-    [0, 4, 7, 12, 16].forEach((s, i) => bell(hz(19 + s), { gain: 0.12, decay: 2.6, when: i * 0.07, pan: -0.5 + i * 0.25 }));
-    whoosh({ dur: 2.2, from: 400, to: 3000, gain: 0.08 });
+    // two notes a fifth apart, the second arriving softly after the first
+    tone([hz(26)], { gain: 0.08, attack: 0.2, decay: 3, cutoff: 1200 });
+    tone([hz(33)], { gain: 0.06, attack: 0.3, decay: 3.4, when: 0.35, cutoff: 1200 });
   },
-  arrive() { bell(hz(31), { gain: 0.1, decay: 3 }); bell(hz(36), { gain: 0.06, decay: 3.2, when: 0.12 }); },
-  otherConnect() { bell(hz(26), { gain: 0.05, decay: 2.5, pan: Math.random() - 0.5 }); },
-  travel() { whoosh({ dur: 3.2, from: 200, to: 1800, gain: 0.1 }); },
-  birth() { swell(hz(0), { dur: 3.5, gain: 0.14 }); bell(hz(24), { gain: 0.12, decay: 3.5, when: 0.6 }); },
-  newStar() { swell(hz(7), { dur: 2.4, gain: 0.06 }); bell(hz(31), { gain: 0.06, decay: 2.5, when: 0.4 }); },
-  levelUp() { [0, 4, 7, 11].forEach((s, i) => bell(hz(24 + s), { gain: 0.08, decay: 1.8, when: i * 0.1 })); },
-  enter() { swell(hz(-5), { dur: 3, gain: 0.1 }); },
-  panel() { whoosh({ dur: 0.9, from: 600, to: 1600, gain: 0.05 }); },
+  travel() { breath({ dur: 3.2, centre: 600, gain: 0.04 }); },
+  arrive() { tone([hz(31)], { gain: 0.05, attack: 0.25, decay: 2.6, cutoff: 1000 }); },
+  birth() { tone([hz(12), hz(19), hz(24)], { gain: 0.07, attack: 1.6, decay: 5, cutoff: 900 }); },
+  enter() { tone([hz(12), hz(19)], { gain: 0.06, attack: 1.2, decay: 4, cutoff: 800 }); },
 };
