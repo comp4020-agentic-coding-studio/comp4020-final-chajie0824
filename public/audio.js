@@ -77,10 +77,14 @@ export function unlock() {
   }
   if (ctx.state === "suspended") ctx.resume();
   // a slow fade in, so the first click doesn't switch a room on
-  master.gain.setTargetAtTime(LEVEL, ctx.currentTime, 2.5);
+  master.gain.setTargetAtTime(LEVEL, ctx.currentTime, 1.2);
   if (!started) { started = true; startMusic(); }
 }
-for (const ev of ["pointerdown", "keydown"]) window.addEventListener(ev, unlock, { capture: true });
+for (const ev of ["pointerdown", "keydown", "touchstart"]) window.addEventListener(ev, unlock, { capture: true });
+// Try at once on load too: a browser that already trusts the site lets it
+// play straight away; otherwise the context stays suspended until the first
+// key press in the name box, or the first click, resumes it.
+unlock();
 
 // --- ambient bed ------------------------------------------------------------
 function startMusic() {
@@ -102,7 +106,7 @@ function startMusic() {
   // pad: soft sawtooth through a dark filter that breathes over ~50 s
   const pad = ctx.createGain();
   pad.gain.setValueAtTime(0, t0);
-  pad.gain.linearRampToValueAtTime(0.12, t0 + 12);
+  pad.gain.linearRampToValueAtTime(0.12, t0 + 5);
   const lp = ctx.createBiquadFilter();
   lp.type = "lowpass";
   lp.frequency.value = 520;

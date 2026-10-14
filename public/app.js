@@ -113,10 +113,10 @@ const PERSON_COLORS = SPECTRAL;
 // knowing people rather than declaring the same edge over and over.
 const TIERS = [
   { min: 0, name: "nascent", size: 0.9 },
-  { min: 1, name: "main sequence", size: 1.4 },
-  { min: 3, name: "bright", size: 2.1 },
-  { min: 6, name: "giant", size: 2.9 },
-  { min: 10, name: "supergiant", size: 3.8 },
+  { min: 1, name: "main sequence", size: 1.1 },
+  { min: 3, name: "bright", size: 1.35 },
+  { min: 6, name: "giant", size: 1.6 },
+  { min: 10, name: "supergiant", size: 1.85 },
 ];
 function tierFor(degree) {
   let t = 0;
@@ -243,7 +243,7 @@ composer.addPass(new RenderPass(scene, camera));
 const SMALL_SCREEN = Math.min(window.innerWidth, window.innerHeight) < 600;
 // High threshold: only genuinely bright cores bloom, never the decorative
 // dust or nebula.
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), SMALL_SCREEN ? 0.5 : 0.75, 0.4, 0.62);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), SMALL_SCREEN ? 0.22 : 0.32, 0.3, 0.8);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
@@ -1814,13 +1814,13 @@ function frame(nowMs) {
     const baseR = 4.6 * (isMe ? 1.15 : style.sizeJitter) * tierSize * node.scale;
     node.core.scale.set(baseR, baseR, 1);
     // capped below 1: under bloom an overexposed core blows out to a square
-    node.coreA += ((status === "dim" ? 0.55 : 0.78) - node.coreA) * 0.03;
+    node.coreA += ((status === "dim" ? 0.42 : 0.6) - node.coreA) * 0.03;
     node.core.material.opacity = node.coreA * vis;
 
-    const haloTargetR = style.haloScale * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 3.2);
+    const haloTargetR = style.haloScale * (status === "online" ? 4.2 : status === "recent" ? 3.4 : 2.8);
     node.haloR += (haloTargetR - node.haloR) * 0.03;
     node.halo.scale.set(baseR * node.haloR, baseR * node.haloR, 1);
-    node.haloA += ((status === "online" ? 0.55 : status === "recent" ? 0.3 : 0.17) - node.haloA) * 0.03;
+    node.haloA += ((status === "online" ? 0.26 : status === "recent" ? 0.16 : 0.1) - node.haloA) * 0.03;
     node.halo.material.opacity = node.haloA * twinkle * vis;
 
     // "currently active" (declared something recently): an occasional flare
@@ -1830,9 +1830,9 @@ function frame(nowMs) {
       const phase = ((animClock / 1000 + style.moteSeed) % FLARE_PERIOD_S) / 0.9;
       if (phase < 1) flare = Math.sin(Math.PI * phase);
     }
-    const spikeBase = (status === "online" ? 0.16 : status === "recent" ? 0.08 : 0.03) + 0.07 * tf;
-    node.spike.material.opacity = (spikeBase + flare * 0.75) * vis;
-    const spikeR = baseR * style.spikeLen * (1 + 0.25 * tf) * (1 + flare * 0.9);
+    const spikeBase = (status === "online" ? 0.06 : status === "recent" ? 0.03 : 0.01) + 0.02 * tf;
+    node.spike.material.opacity = (spikeBase + flare * 0.25) * vis;
+    const spikeR = baseR * style.spikeLen * (1 + 0.1 * tf) * (1 + flare * 0.4);
     node.spike.scale.set(spikeR, spikeR, 1);
 
     for (let i = 0; i < node.motes.length; i++) {
@@ -1841,7 +1841,7 @@ function frame(nowMs) {
       const ang = (animate ? animClock * 0.00025 * (1 + i * 0.35) : 0) + style.moteSeed + i * 2.1;
       mote.position.set(Math.cos(ang) * orbit, Math.sin(ang * 0.7) * orbit * 0.4, Math.sin(ang) * orbit);
       mote.scale.set(baseR * 0.45, baseR * 0.45, 1);
-      mote.material.opacity = (status === "dim" ? 0.1 : 0.45) * vis;
+      mote.material.opacity = (status === "dim" ? 0.06 : 0.25) * vis;
     }
 
     // Tier structure fades in as tierF crosses each threshold.
@@ -1851,27 +1851,23 @@ function frame(nowMs) {
     const orbitR = baseR * 3.2;
     node.orbitA.scale.set(orbitR, orbitR, 1);
     node.orbitA.rotation.z = spin;
-    node.orbitA.material.opacity = 0.42 * step(2) * dimMul * vis;
+    node.orbitA.material.opacity = 0.24 * step(2) * dimMul * vis;
     const orbitR2 = baseR * 4.1;
     node.orbitB.scale.set(orbitR2, orbitR2, 1);
     node.orbitB.rotation.z = -spin * 0.7;
-    node.orbitB.material.opacity = 0.3 * step(3) * dimMul * vis;
+    node.orbitB.material.opacity = 0.16 * step(3) * dimMul * vis;
     const coronaPulse = animate ? 0.85 + 0.15 * Math.sin(animClock * 0.0009 + style.twinklePhase) : 1;
     const coronaR = baseR * 6 * coronaPulse;
     node.corona.scale.set(coronaR, coronaR, 1);
     node.corona.material.rotation = animate ? animClock * 0.00005 * style.orbitSpin : 0;
-    node.corona.material.opacity = 0.32 * step(4) * dimMul * vis;
+    node.corona.material.opacity = 0.1 * step(4) * dimMul * vis;
     // Giants and up emit a slow sonar ping; a level-up fires one big ring.
     const sinceUp = nowMs - node.levelUpAt;
     let pulseA = 0, pulseR = baseR;
     if (sinceUp < 1800) {
       const u = sinceUp / 1800;
       pulseR = baseR * (2 + u * 14);
-      pulseA = 0.9 * (1 - u) * (1 - u);
-    } else if (tf >= 2.5 && animate) {
-      const u = ((animClock / 1000 + style.moteSeed) % 4.5) / 4.5;
-      pulseR = baseR * (2 + u * 7);
-      pulseA = 0.22 * (1 - u) * step(3) * dimMul;
+      pulseA = 0.4 * (1 - u) * (1 - u);
     }
     node.pulse.scale.set(pulseR, pulseR, 1);
     node.pulse.material.opacity = pulseA * vis;

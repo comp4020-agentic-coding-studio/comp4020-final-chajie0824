@@ -78,11 +78,17 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   they turned the sky into noise and chajie judged it uglier than before.
   Don't bring back a per-edge shape or colour effect without comparing a
   screenshot of the live sky against the current one first.
+- **Stars stay quiet: the mood is still and calm, not dazzling.** Bloom is
+  low, halos small and faint, diffraction spikes barely there, and the tier
+  size range is narrow (0.9–1.85). Brighter, blown-out stars were tried and
+  chajie found them cheap-looking. A higher tier should read as a little
+  more structure, never as a much brighter blob.
 - **Sound is synthesised in `public/audio.js` with the Web Audio API — no
   audio files, no library.** The ambient bed and every cue go through one
   master gain behind the `sound` toggle (a `localStorage` viewer preference
-  like `animate`, never gating a feature). Nothing plays before the first
-  click or key press. The register is calm and far away: the bed is a drone,
+  like `animate`, never gating a feature). It tries to start on page load so
+  the bed is already playing on the name screen; where the browser blocks
+  that, the first key press in the name box starts it. The register is calm and far away: the bed is a drone,
   a slow pad (a chord change every ~30 s) and faint noise, with **nothing
   random or percussive in it** — a first version with random "starlight"
   pings, fast chord changes and glassy bell cues read to chajie as restless
