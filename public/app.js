@@ -1557,7 +1557,9 @@ const spectacleLabels = []; // {sprite, until}
 function noteSpectacle(stars, edges) {
   if (knownStarIds) {
     for (const s of stars) {
-      if (!knownStarIds.has(s.id) && !(me && s.id === me.id)) spawnSpectacleLabel(s.id, `${s.pseudonym} joined the sky`);
+      if (knownStarIds.has(s.id)) continue;
+      spawnShockwave(s.id, true);
+      if (!(me && s.id === me.id)) spawnSpectacleLabel(s.id, `${s.pseudonym} joined the sky`);
     }
   }
   if (knownEventCounts) {
@@ -1575,6 +1577,54 @@ function noteSpectacle(stars, edges) {
   knownStarIds = new Set(stars.map((s) => s.id));
   knownEventCounts = new Map(edges.map((e) => [e.id, e.eventCount]));
 }
+// Shockwaves: a shell of particles thrown out from a star and fading, for a
+// birth (big) or a level-up (smaller). One Points object per wave, freed
+// when it finishes; capped so a burst of joins can't pile up.
+const shockwaves = [];
+const SHOCK_PARTICLES = 140;
+function spawnShockwave(starId, big) {
+  if (shockwaves.length > 6) return;
+  const style = styleFor(starId);
+  const dirs = new Float32Array(SHOCK_PARTICLES * 3);
+  for (let i = 0; i < SHOCK_PARTICLES; i++) {
+    // a thin, tilted ring with a little scatter, so it reads as a wavefront
+    const th = (i / SHOCK_PARTICLES) * Math.PI * 2 + Math.random() * 0.05;
+    const sp = 0.92 + Math.random() * 0.16;
+    const lift = (Math.random() - 0.5) * 0.12;
+    dirs[i * 3] = Math.cos(th) * sp;
+    dirs[i * 3 + 1] = Math.sin(th) * sp * 0.35 + lift;
+    dirs[i * 3 + 2] = Math.sin(th) * sp * 0.94;
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(SHOCK_PARTICLES * 3), 3));
+  const mat = new THREE.PointsMaterial({
+    size: big ? 7 : 5, color: style.color.hex, map: haloTexture, transparent: true, opacity: 0,
+    blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true,
+  });
+  const pts = new THREE.Points(geom, mat);
+  scene.add(pts);
+  shockwaves.push({ pts, dirs, starId, born: performance.now(), dur: big ? 2200 : 1500, reach: big ? 170 : 100 });
+}
+function stepShockwaves(nowMs) {
+  for (let k = shockwaves.length - 1; k >= 0; k--) {
+    const w = shockwaves[k];
+    const u = (nowMs - w.born) / w.dur;
+    if (u >= 1) {
+      scene.remove(w.pts); w.pts.geometry.dispose(); w.pts.material.dispose();
+      shockwaves.splice(k, 1);
+      continue;
+    }
+    const p = physicsFor(w.starId);
+    const d = w.reach * (1 - Math.pow(1 - u, 3)); // fast out, slow settle
+    const pos = w.pts.geometry.attributes.position;
+    for (let i = 0; i < SHOCK_PARTICLES; i++) {
+      pos.setXYZ(i, p.x + w.dirs[i * 3] * d, p.y + w.dirs[i * 3 + 1] * d, p.z + w.dirs[i * 3 + 2] * d);
+    }
+    pos.needsUpdate = true;
+    w.pts.material.opacity = Math.min(1, u * 8) * (1 - u) * (1 - u) * 0.85;
+  }
+}
+
 function spawnSpectacleLabel(starId, text) {
   const sprite = textSprite(text, "rgba(255,225,150,0.95)");
   const p = physicsFor(starId);
@@ -1679,7 +1729,10 @@ function frame(nowMs) {
       : 1;
     const tier = tierFor(degree.get(star.id) ?? 0);
     // a level-up (not the first frame, not History scrubbing) fires a pulse
-    if (node.tier >= 0 && tier > node.tier && !historyMode) node.levelUpAt = nowMs;
+    if (node.tier >= 0 && tier > node.tier && !historyMode) {
+      node.levelUpAt = nowMs;
+      spawnShockwave(star.id, tier === TIERS.length - 1);
+    }
     node.tier = tier;
     if (node.tierF < 0) node.tierF = tier;
     node.tierF += (tier - node.tierF) * 0.04;
@@ -1798,6 +1851,7 @@ function frame(nowMs) {
   }
 
   updateConnections(animClock, drawState.edges, focusId);
+  stepShockwaves(nowMs);
 
   // gravity preview while in connect-mode and hovering someone else
   if (connectMode && me && hoverStarId && hoverStarId !== me.id) {
