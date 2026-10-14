@@ -545,7 +545,7 @@ function nodeFor(star) {
 // One declared event = one strand of light: a thin additive line along a
 // gently-bent curve between the two stars, fanned out per event so repeated
 // events visibly read as separate threads, plus a small travelling photon.
-const STRAND_SAMPLES = 18;
+const STRAND_SAMPLES = 120; // enough for ~7 helix turns to stay smooth
 const strands = new Map(); // "edgeId:i" -> {line, photon, color, speed, phase, seed}
 // Redshift: old light is redder. A strand starts in its declarer's colour
 // and drifts toward deep red as the event it stands for recedes into the
@@ -589,7 +589,7 @@ function quadBezier(a, m, b, t, out) {
   out.z = omt * omt * a.z + 2 * omt * t * m.z + t * t * b.z;
   return out;
 }
-const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpM = new THREE.Vector3(), tmpP = new THREE.Vector3();
+const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpM = new THREE.Vector3(), tmpM2 = new THREE.Vector3(), tmpP = new THREE.Vector3();
 
 function newestEventIndex(events) {
   let best = events.length - 1, bestT = -Infinity;
@@ -620,6 +620,16 @@ function updateConnections(nowMs, drawEdges, focusId) {
 
     const events = edge.events ?? [];
     const n = events.length;
+    // On a mutual edge, each side's newest declaration becomes one of the
+    // two helix strands; every older event stays a thin fanned arc.
+    const helixLead = new Set();
+    if (edge.mutual) {
+      for (const who of [edge.starA, edge.starB]) {
+        let best = -1;
+        events.forEach((ev, k) => { if (ev.declaredBy === who && (best < 0 || ev.occurredOn >= events[best].occurredOn)) best = k; });
+        if (best >= 0) helixLead.add(best);
+      }
+    }
     events.forEach((ev, i) => {
       const key = `${edge.id}:${i}`;
       liveStrandKeys.add(key);
@@ -636,10 +646,29 @@ function updateConnections(nowMs, drawEdges, focusId) {
       const offset = u.clone().multiplyScalar(Math.cos(angle) * mag).add(v.clone().multiplyScalar(Math.sin(angle) * mag));
       tmpM.copy(tmpA).add(tmpB).multiplyScalar(0.5).add(offset);
 
+      // Mutual edges twist into a double helix: each side's strands wind
+      // around the bent spine half a turn apart, so "both of us said so"
+      // reads as two threads braided together. One-sided edges keep the
+      // plain fanned arc.
+      const helix = helixLead.has(i);
+      const side = ev.declaredBy === edge.starA ? 0 : Math.PI;
+      const turns = Math.max(2, Math.min(6, Math.round(abLen / 110)));
+      const helixR = Math.max(8, Math.min(22, abLen * 0.045));
+      const helixSpin = animate ? animClock * 0.0003 : 0;
+      tmpM2.copy(tmpA).add(tmpB).multiplyScalar(0.5).add(
+        u.clone().multiplyScalar(Math.cos(angle) * 22).add(v.clone().multiplyScalar(Math.sin(angle) * 22)),
+      );
       const posAttr = strand.line.geometry.attributes.position;
       for (let s = 0; s < STRAND_SAMPLES; s++) {
         const t = s / (STRAND_SAMPLES - 1);
-        quadBezier(tmpA, tmpM, tmpB, t, tmpP);
+        if (helix) {
+          quadBezier(tmpA, tmpM2, tmpB, t, tmpP);
+          const env = Math.sin(Math.PI * t); // pinch to the stars at both ends
+          const ph = t * turns * Math.PI * 2 + side + helixSpin;
+          tmpP.addScaledVector(u, Math.cos(ph) * helixR * env).addScaledVector(v, Math.sin(ph) * helixR * env);
+        } else {
+          quadBezier(tmpA, tmpM, tmpB, t, tmpP);
+        }
         posAttr.setXYZ(s, tmpP.x, tmpP.y, tmpP.z);
       }
       posAttr.needsUpdate = true;
@@ -655,13 +684,21 @@ function updateConnections(nowMs, drawEdges, focusId) {
       // edge). Both are now ~3x slower: a gentle multi-second drift.
       const pulse = animate ? 0.9 + 0.1 * Math.sin(nowMs * 0.0007 + seed) : 1;
       const visible = fadeIn * (ev.fade ?? 1) * revealMul * strand.attn;
-      strand.line.material.opacity = Math.min(0.95, ev.brightness * 0.55 * pulse * visible);
+      const role = helix ? 1.6 : edge.mutual ? 0.45 : 1;
+      strand.line.material.opacity = Math.min(0.95, Math.max(helix ? 0.35 : 0, ev.brightness) * 0.55 * role * pulse * visible);
 
       if (animate) {
         const speed = 0.00005 + (seed % 97) / 97 * 0.00006;
         const phase = (seed % 1000) / 1000;
         const frac = (nowMs * speed + phase) % 1;
-        quadBezier(tmpA, tmpM, tmpB, frac, tmpP);
+        if (helix) {
+          quadBezier(tmpA, tmpM2, tmpB, frac, tmpP);
+          const env = Math.sin(Math.PI * frac);
+          const ph = frac * turns * Math.PI * 2 + side + (animate ? animClock * 0.0003 : 0);
+          tmpP.addScaledVector(u, Math.cos(ph) * helixR * env).addScaledVector(v, Math.sin(ph) * helixR * env);
+        } else {
+          quadBezier(tmpA, tmpM, tmpB, frac, tmpP);
+        }
         strand.photon.position.copy(tmpP);
         strand.photon.material.opacity = ev.brightness * 0.8 * visible;
       } else {
