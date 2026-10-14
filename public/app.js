@@ -545,23 +545,8 @@ function nodeFor(star) {
 // One declared event = one strand of light: a thin additive line along a
 // gently-bent curve between the two stars, fanned out per event so repeated
 // events visibly read as separate threads, plus a small travelling photon.
-const STRAND_SAMPLES = 120; // enough for ~7 helix turns to stay smooth
+const STRAND_SAMPLES = 18;
 const strands = new Map(); // "edgeId:i" -> {line, photon, color, speed, phase, seed}
-// Redshift: old light is redder. A strand starts in its declarer's colour
-// and drifts toward deep red as the event it stands for recedes into the
-// past — the README's "a friendship from last year is fainter old light,
-// not deleted", drawn as colour. Measured against History's date when
-// scrubbing, so dragging the timeline shows light reddening. Much slower
-// than brightness's 21-day half-life, so old friends don't all turn red.
-const REDSHIFT_DAYS = 240;
-const OLD_LIGHT = new THREE.Color(0xff5a3c);
-const tmpColor = new THREE.Color();
-function redshifted(baseHex, occurredOn, nowMs) {
-  const ageDays = Math.max(0, (nowMs - new Date(occurredOn).getTime()) / 86_400_000);
-  const k = 1 - Math.exp(-ageDays / REDSHIFT_DAYS);
-  return tmpColor.setHex(baseHex).lerp(OLD_LIGHT, k * 0.85);
-}
-
 function strandFor(key, color) {
   let s = strands.get(key);
   if (!s) {
@@ -589,7 +574,7 @@ function quadBezier(a, m, b, t, out) {
   out.z = omt * omt * a.z + 2 * omt * t * m.z + t * t * b.z;
   return out;
 }
-const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpM = new THREE.Vector3(), tmpM2 = new THREE.Vector3(), tmpP = new THREE.Vector3();
+const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpM = new THREE.Vector3(), tmpP = new THREE.Vector3();
 
 function newestEventIndex(events) {
   let best = events.length - 1, bestT = -Infinity;
@@ -620,55 +605,22 @@ function updateConnections(nowMs, drawEdges, focusId) {
 
     const events = edge.events ?? [];
     const n = events.length;
-    // On a mutual edge, each side's newest declaration becomes one of the
-    // two helix strands; every older event stays a thin fanned arc.
-    const helixLead = new Set();
-    if (edge.mutual) {
-      for (const who of [edge.starA, edge.starB]) {
-        let best = -1;
-        events.forEach((ev, k) => { if (ev.declaredBy === who && (best < 0 || ev.occurredOn >= events[best].occurredOn)) best = k; });
-        if (best >= 0) helixLead.add(best);
-      }
-    }
     events.forEach((ev, i) => {
       const key = `${edge.id}:${i}`;
       liveStrandKeys.add(key);
       const seed = Math.abs(hashString(key));
       const color = (styleFor(ev.declaredBy).color);
       const strand = strandFor(key, color.hex);
-      const asOfMs = historyMode && historyAsOf ? historyAsOf.getTime() : Date.now();
-      const shifted = redshifted(color.hex, ev.occurredOn, asOfMs);
-      strand.line.material.color.copy(shifted);
-      strand.photon.material.color.copy(shifted);
 
       const angle = (seed % 628) / 100;
       const mag = 16 + (i % 6) * 10 + (n > 1 ? 14 : 0);
       const offset = u.clone().multiplyScalar(Math.cos(angle) * mag).add(v.clone().multiplyScalar(Math.sin(angle) * mag));
       tmpM.copy(tmpA).add(tmpB).multiplyScalar(0.5).add(offset);
 
-      // Mutual edges twist into a double helix: each side's strands wind
-      // around the bent spine half a turn apart, so "both of us said so"
-      // reads as two threads braided together. One-sided edges keep the
-      // plain fanned arc.
-      const helix = helixLead.has(i);
-      const side = ev.declaredBy === edge.starA ? 0 : Math.PI;
-      const turns = Math.max(2, Math.min(6, Math.round(abLen / 110)));
-      const helixR = Math.max(8, Math.min(22, abLen * 0.045));
-      const helixSpin = animate ? animClock * 0.0003 : 0;
-      tmpM2.copy(tmpA).add(tmpB).multiplyScalar(0.5).add(
-        u.clone().multiplyScalar(Math.cos(angle) * 22).add(v.clone().multiplyScalar(Math.sin(angle) * 22)),
-      );
       const posAttr = strand.line.geometry.attributes.position;
       for (let s = 0; s < STRAND_SAMPLES; s++) {
         const t = s / (STRAND_SAMPLES - 1);
-        if (helix) {
-          quadBezier(tmpA, tmpM2, tmpB, t, tmpP);
-          const env = Math.sin(Math.PI * t); // pinch to the stars at both ends
-          const ph = t * turns * Math.PI * 2 + side + helixSpin;
-          tmpP.addScaledVector(u, Math.cos(ph) * helixR * env).addScaledVector(v, Math.sin(ph) * helixR * env);
-        } else {
-          quadBezier(tmpA, tmpM, tmpB, t, tmpP);
-        }
+        quadBezier(tmpA, tmpM, tmpB, t, tmpP);
         posAttr.setXYZ(s, tmpP.x, tmpP.y, tmpP.z);
       }
       posAttr.needsUpdate = true;
@@ -684,21 +636,13 @@ function updateConnections(nowMs, drawEdges, focusId) {
       // edge). Both are now ~3x slower: a gentle multi-second drift.
       const pulse = animate ? 0.9 + 0.1 * Math.sin(nowMs * 0.0007 + seed) : 1;
       const visible = fadeIn * (ev.fade ?? 1) * revealMul * strand.attn;
-      const role = helix ? 1.6 : edge.mutual ? 0.45 : 1;
-      strand.line.material.opacity = Math.min(0.95, Math.max(helix ? 0.35 : 0, ev.brightness) * 0.55 * role * pulse * visible);
+      strand.line.material.opacity = Math.min(0.95, ev.brightness * 0.55 * pulse * visible);
 
       if (animate) {
         const speed = 0.00005 + (seed % 97) / 97 * 0.00006;
         const phase = (seed % 1000) / 1000;
         const frac = (nowMs * speed + phase) % 1;
-        if (helix) {
-          quadBezier(tmpA, tmpM2, tmpB, frac, tmpP);
-          const env = Math.sin(Math.PI * frac);
-          const ph = frac * turns * Math.PI * 2 + side + (animate ? animClock * 0.0003 : 0);
-          tmpP.addScaledVector(u, Math.cos(ph) * helixR * env).addScaledVector(v, Math.sin(ph) * helixR * env);
-        } else {
-          quadBezier(tmpA, tmpM, tmpB, frac, tmpP);
-        }
+        quadBezier(tmpA, tmpM, tmpB, frac, tmpP);
         strand.photon.position.copy(tmpP);
         strand.photon.material.opacity = ev.brightness * 0.8 * visible;
       } else {
@@ -1666,6 +1610,7 @@ surface.visible = false;
 scene.add(surface);
 const SURFACE_NEAR = 70, SURFACE_FAR = 170;
 let surfaceA = 0;
+const focusPoint = new THREE.Vector3();
 function stepSurface(stars, nowMs) {
   let best = null, bestD = Infinity;
   for (const st of stars) {
@@ -1692,115 +1637,6 @@ function stepSurface(stars, nowMs) {
   best.node.spike.material.opacity *= glare;
 }
 
-// Cluster nebulae: every group of 3+ people joined by connections gets a
-// faint cloud behind it, tinted by its members' spectral colours and sized
-// to how far they spread. Unlike the decorative nebula wash (fixed seed,
-// never real data), these ARE the data: the clusters that emerge from who
-// declared what, made visible. Layered sprites at a few offsets so it reads
-// as a cloud, not a disc.
-const nebulaTexture = (() => {
-  const size = 256;
-  const c = document.createElement("canvas");
-  c.width = c.height = size;
-  const g = c.getContext("2d");
-  const rand = mulberry32(7);
-  for (let k = 0; k < 14; k++) {
-    const x = size / 2 + (rand() - 0.5) * size * 0.45;
-    const y = size / 2 + (rand() - 0.5) * size * 0.45;
-    const r = size * (0.18 + rand() * 0.22);
-    const grad = g.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, "rgba(255,255,255,0.22)");
-    grad.addColorStop(1, "rgba(255,255,255,0)");
-    g.fillStyle = grad;
-    g.fillRect(0, 0, size, size);
-  }
-  // force a clean, zero-alpha edge so no square ever shows under bloom
-  const mask = g.createRadialGradient(size / 2, size / 2, size * 0.3, size / 2, size / 2, size / 2 - 1);
-  mask.addColorStop(0, "rgba(0,0,0,1)");
-  mask.addColorStop(1, "rgba(0,0,0,0)");
-  g.globalCompositeOperation = "destination-in";
-  g.fillStyle = mask;
-  g.fillRect(0, 0, size, size);
-  return new THREE.CanvasTexture(c);
-})();
-const clusterCentre = new THREE.Vector3();
-const clusterClouds = new Map(); // cluster key -> {sprites, color, center, radius, a}
-function clustersOf(stars, edges) {
-  const parent = new Map(stars.map((s) => [s.id, s.id]));
-  const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
-  for (const e of edges) {
-    if (!parent.has(e.starA) || !parent.has(e.starB)) continue;
-    const a = find(e.starA), b = find(e.starB);
-    if (a !== b) parent.set(a, b);
-  }
-  const groups = new Map();
-  for (const s of stars) {
-    const r = find(s.id);
-    if (!groups.has(r)) groups.set(r, []);
-    groups.get(r).push(s.id);
-  }
-  return [...groups.values()].filter((g) => g.length >= 3);
-}
-function stepClusterNebulae(stars, edges) {
-  const live = new Set();
-  for (const members of clustersOf(stars, edges)) {
-    // keyed by its oldest member, so a cloud survives people joining it
-    const key = members.slice().sort()[0];
-    live.add(key);
-    let cloud = clusterClouds.get(key);
-    if (!cloud) {
-      const sprites = [0, 1, 2].map((k) => {
-        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: nebulaTexture, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-          rotation: k * 2.1,
-        }));
-        scene.add(sp);
-        return sp;
-      });
-      cloud = { sprites, center: new THREE.Vector3(), radius: 0, a: 0, color: new THREE.Color() };
-      clusterClouds.set(key, cloud);
-    }
-    // centre and spread from the live (simulated) positions
-    const c = clusterCentre.set(0, 0, 0);
-    for (const id of members) { const p = physicsFor(id); c.x += p.x; c.y += p.y; c.z += p.z; }
-    c.divideScalar(members.length);
-    let spread = 0;
-    const mix = new THREE.Color(0, 0, 0);
-    for (const id of members) {
-      const p = physicsFor(id);
-      spread = Math.max(spread, Math.hypot(p.x - c.x, p.y - c.y, p.z - c.z));
-      mix.add(tmpColor.setHex(styleFor(id).color.hex));
-    }
-    mix.multiplyScalar(1 / members.length);
-    // averaging spectral colours drifts toward grey-brown; push saturation
-    // back up so a cluster keeps a hue (a cool cluster blue, a warm one amber)
-    const hsl = {};
-    mix.getHSL(hsl);
-    mix.setHSL(hsl.h, Math.min(1, hsl.s * 2.2 + 0.25), 0.55);
-    cloud.center.lerp(c, cloud.a === 0 ? 1 : 0.05);
-    // capped: a sky that's mostly one cluster mustn't fog the whole screen
-    cloud.radius += ((Math.min(320, spread * 0.8 + 50)) - cloud.radius) * 0.05;
-    cloud.color.lerp(mix, 0.05);
-    cloud.a += (Math.min(1, 0.4 + members.length * 0.06) - cloud.a) * 0.02;
-    cloud.sprites.forEach((sp, k) => {
-      const off = (k - 1) * cloud.radius * 0.25;
-      sp.position.set(cloud.center.x + off, cloud.center.y - off * 0.4, cloud.center.z + off * 0.3);
-      const sc = cloud.radius * (2.2 - k * 0.35);
-      sp.scale.set(sc, sc, 1);
-      sp.material.color.copy(cloud.color);
-      sp.material.opacity = 0.022 * cloud.a * revealMul;
-    });
-  }
-  for (const [key, cloud] of clusterClouds) {
-    if (live.has(key)) continue;
-    cloud.a *= 0.94;
-    for (const sp of cloud.sprites) sp.material.opacity *= 0.94;
-    if (cloud.a < 0.01) {
-      for (const sp of cloud.sprites) { scene.remove(sp); sp.material.dispose(); }
-      clusterClouds.delete(key);
-    }
-  }
-}
 
 // Shockwaves: a shell of particles thrown out from a star and fading, for a
 // birth (big) or a level-up (smaller). One Points object per wave, freed
@@ -1953,7 +1789,7 @@ function frame(nowMs) {
     let attnTarget = related ? 1 : 0.4;
     if (focusId && !related) {
       const fp = physicsFor(focusId);
-      const dz = Math.abs(camera.position.distanceTo(node.group.position) - camera.position.distanceTo(clusterCentre.set(fp.x, fp.y, fp.z)));
+      const dz = Math.abs(camera.position.distanceTo(node.group.position) - camera.position.distanceTo(focusPoint.set(fp.x, fp.y, fp.z)));
       attnTarget = Math.max(0.12, 0.45 - dz / 1400);
     }
     node.attn += (attnTarget - node.attn) * 0.06;
@@ -2087,7 +1923,6 @@ function frame(nowMs) {
 
   updateConnections(animClock, drawState.edges, focusId);
   stepShockwaves(nowMs);
-  stepClusterNebulae(drawState.stars, drawState.edges);
   stepSurface(drawState.stars, nowMs);
 
   // gravity preview while in connect-mode and hovering someone else

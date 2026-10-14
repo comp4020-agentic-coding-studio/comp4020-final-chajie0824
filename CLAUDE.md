@@ -70,11 +70,12 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   the thing. Decorative background stars/nebula are purely client-side and
   seeded with a fixed constant (`SKY_SEED`), not derived from real data — they
   must stay visually distinct from (smaller/dimmer than) actual people-stars.
-  **Cluster nebulae are the opposite and must stay that way:** they are drawn
-  only from real connections (one cloud per group of 3+ connected people),
-  so never seed them, place them decoratively, or let them exist without a
-  cluster behind them. Keep them faint and size-capped so a sky that's
-  mostly one cluster isn't fogged.
+  **Connections stay plain arcs in their declarer's colour.** A double helix
+  on mutual edges, redshifting old strands toward red, and a tinted nebula
+  behind each cluster were all built and then removed (2026-10-14): together
+  they turned the sky into noise and chajie judged it uglier than before.
+  Don't bring back a per-edge shape or colour effect without comparing a
+  screenshot of the live sky against the current one first.
 - **A star's look has two sources and they must not mix: colour (spectral
   class) comes from its id, structure and size (magnitude tier) come from its
   connections.** Never colour by tier or size by id. Tier counts distinct
