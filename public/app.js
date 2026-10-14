@@ -80,15 +80,37 @@ function hashString(s) {
   return h;
 }
 
-// Restrained, near-monochrome identity palette — explicitly not saturated
-// RGB. Each person's star gets a stable look derived from its id alone.
-const PERSON_COLORS = [
-  { hex: 0xf4f3fa, glow: "244,243,250" }, // warm/neutral white
-  { hex: 0xf6e6bf, glow: "246,230,191" }, // pale gold
-  { hex: 0xd8e9ff, glow: "216,233,255" }, // cold white
-  { hex: 0xbdeef0, glow: "189,238,240" }, // faint cyan
-  { hex: 0xdccdf0, glow: "220,205,240" }, // faint lavender
+// Each person's star takes a stellar spectral class from its id — real star
+// colours, from hot blue O/B through white A/F and yellow G to orange K and
+// red M — so the sky reads as a population, not a field of white dots. The
+// class is a fingerprint; how big and elaborate a star is comes from its
+// connections (`tierFor`), never from the id.
+const SPECTRAL = [
+  { cls: "O", hex: 0x9db4ff, glow: "157,180,255" },
+  { cls: "B", hex: 0xaabfff, glow: "170,191,255" },
+  { cls: "A", hex: 0xcad7ff, glow: "202,215,255" },
+  { cls: "F", hex: 0xf8f7ff, glow: "248,247,255" },
+  { cls: "G", hex: 0xfff2a1, glow: "255,242,161" },
+  { cls: "K", hex: 0xffc46f, glow: "255,196,111" },
+  { cls: "M", hex: 0xff8a5c, glow: "255,138,92" },
 ];
+const PERSON_COLORS = SPECTRAL;
+
+// Magnitude tiers: a star grows new structure as it gathers connections.
+// Thresholds are distinct people connected, not events, so it rewards
+// knowing people rather than declaring the same edge over and over.
+const TIERS = [
+  { min: 0, name: "nascent", size: 0.9 },
+  { min: 1, name: "main sequence", size: 1.4 },
+  { min: 3, name: "bright", size: 2.1 },
+  { min: 6, name: "giant", size: 2.9 },
+  { min: 10, name: "supergiant", size: 3.8 },
+];
+function tierFor(degree) {
+  let t = 0;
+  for (let i = 0; i < TIERS.length; i++) if (degree >= TIERS[i].min) t = i;
+  return t;
+}
 const styleCache = new Map();
 function styleFor(id) {
   if (styleCache.has(id)) return styleCache.get(id);
@@ -98,6 +120,8 @@ function styleFor(id) {
   // motes orbit it — so a person reads as "their" star, never an avatar.
   const style = {
     color: PERSON_COLORS[Math.floor(rand() * PERSON_COLORS.length)],
+    orbitTilt: (rand() - 0.5) * 1.2,
+    orbitSpin: (0.15 + rand() * 0.25) * (rand() < 0.5 ? -1 : 1),
     sizeJitter: 0.85 + rand() * 0.5,
     twinklePhase: rand() * Math.PI * 2,
     twinkleSpeed: 0.3 + rand() * 0.4,
@@ -260,6 +284,63 @@ const ringTexture = (() => {
   return new THREE.CanvasTexture(c);
 })();
 
+// HUD-style orbit ring: a thin circle with tick marks and one bright arc, so
+// a rotating ring reads as instrumentation rather than a plain halo.
+const orbitTexture = (() => {
+  const size = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  const r = size / 2 - 8;
+  g.translate(size / 2, size / 2);
+  g.strokeStyle = "rgba(255,255,255,0.55)";
+  g.lineWidth = 1.5;
+  g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.stroke();
+  for (let i = 0; i < 48; i++) {
+    const a = (i / 48) * Math.PI * 2;
+    const len = i % 6 === 0 ? 9 : 4;
+    g.strokeStyle = i % 6 === 0 ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.4)";
+    g.beginPath();
+    g.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    g.lineTo(Math.cos(a) * (r - len), Math.sin(a) * (r - len));
+    g.stroke();
+  }
+  g.strokeStyle = "rgba(255,255,255,1)";
+  g.lineWidth = 3.5;
+  g.beginPath(); g.arc(0, 0, r, -0.5, 0.45); g.stroke();
+  return new THREE.CanvasTexture(c);
+})();
+// hairline ring for the sonar ping, so it stays thin when scaled up large
+const pulseTexture = (() => {
+  const size = 512;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.strokeStyle = "rgba(255,255,255,1)";
+  g.lineWidth = 2;
+  g.beginPath(); g.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2); g.stroke();
+  return new THREE.CanvasTexture(c);
+})();
+// soft, slightly ragged corona for supergiants
+const coronaTexture = (() => {
+  const size = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.translate(size / 2, size / 2);
+  for (let i = 0; i < 64; i++) {
+    const a = (i / 64) * Math.PI * 2;
+    const len = size * (0.26 + 0.18 * Math.abs(Math.sin(i * 2.7)));
+    const grad = g.createLinearGradient(0, 0, Math.cos(a) * len, Math.sin(a) * len);
+    grad.addColorStop(0, "rgba(255,255,255,0.35)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    g.strokeStyle = grad;
+    g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(Math.cos(a) * len, Math.sin(a) * len); g.stroke();
+  }
+  return new THREE.CanvasTexture(c);
+})();
+
 // faint four-point diffraction spike: two thin, centre-weighted crossed lines
 const spikeTexture = (() => {
   const size = 256;
@@ -383,10 +464,33 @@ function nodeFor(star) {
       group.add(mote);
       motes.push(mote);
     }
-    group.add(halo, spike, core, ring);
+    // Tier structure. Orbit rings are flat meshes, not sprites, so they tilt
+    // in 3D and foreshorten as the camera moves — that's what sells them.
+    const orbitMat = () => new THREE.MeshBasicMaterial({
+      map: orbitTexture, color: style.color.hex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const orbitGeom = new THREE.PlaneGeometry(1, 1);
+    const orbitA = new THREE.Mesh(orbitGeom, orbitMat());
+    const orbitB = new THREE.Mesh(orbitGeom, orbitMat());
+    orbitA.rotation.x = Math.PI / 2 + style.orbitTilt;
+    orbitB.rotation.x = Math.PI / 2 - style.orbitTilt * 0.6;
+    orbitB.rotation.y = 1.1;
+    const corona = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: coronaTexture, color: style.color.hex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    const pulse = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: pulseTexture, color: style.color.hex, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    group.add(corona, halo, spike, orbitA, orbitB, pulse, core, ring);
     scene.add(group);
     node = {
-      group, core, halo, ring, spike, motes, label: null, labelText: null, scale: 0,
+      group, core, halo, ring, spike, motes, orbitA, orbitB, corona, pulse,
+      // eased tier (fractional while growing) and when it last went up
+      tierF: -1, tier: -1, levelUpAt: -1e9,
+      label: null, labelText: null, scale: 0,
       // eased visual state, so status changes (online → recent → dim) and
       // attention dimming glide instead of popping
       coreA: 0, haloA: 0, haloR: 0, attn: 1, labelA: 0,
@@ -954,7 +1058,7 @@ birthForm.addEventListener("submit", async (e) => {
     await pollState();
     await refreshMe();
     connectStream();
-    startIntro("birth");
+    startIntro(data.returning ? "arrival" : "birth");
   } else {
     alert(data.error);
   }
@@ -1110,7 +1214,8 @@ function starInfoHtml(star) {
   const lines = [
     `<span class="label-name">${escapeHtml(star.pseudonym)}</span>`,
     `<span class="label-meta">joined ${fmtDay(new Date(star.created_at))}</span>`,
-    `<span class="label-meta">${conns} connection${conns === 1 ? "" : "s"}</span>`,
+    `<span class="label-meta label-class">class ${styleFor(star.id).color.cls} · ${TIERS[tierFor(conns)].name}</span>`,
+    `<span class="label-meta">${conns} connection${conns === 1 ? "" : "s"}${tierFor(conns) < TIERS.length - 1 ? ` · ${TIERS[tierFor(conns) + 1].min - conns} to ${TIERS[tierFor(conns) + 1].name}` : ""}</span>`,
     `<span class="label-meta">${onlineIds.has(star.id) ? "here now" : `last seen ${fmtAgo(Date.now() - new Date(star.last_seen_at).getTime())}`}</span>`,
   ];
   if (me && star.id === me.id) {
@@ -1476,6 +1581,12 @@ function frame(nowMs) {
   const neighbourOrder = neighbours ? [...neighbours] : [];
   const activeIds = activeStarIds();
 
+  const degree = new Map();
+  for (const e of drawState.edges) {
+    degree.set(e.starA, (degree.get(e.starA) ?? 0) + 1);
+    degree.set(e.starB, (degree.get(e.starB) ?? 0) + 1);
+  }
+
   const drawnIds = new Set();
   for (const star of drawState.stars) {
     drawnIds.add(star.id);
@@ -1499,15 +1610,23 @@ function frame(nowMs) {
     const twinkle = animate && status === "online"
       ? 0.75 + 0.25 * Math.sin(animClock * 0.0012 * style.twinkleSpeed + style.twinklePhase)
       : 1;
-    const baseR = (isMe ? 7 : 4.6 * style.sizeJitter) * node.scale;
+    const tier = tierFor(degree.get(star.id) ?? 0);
+    // a level-up (not the first frame, not History scrubbing) fires a pulse
+    if (node.tier >= 0 && tier > node.tier && !historyMode) node.levelUpAt = nowMs;
+    node.tier = tier;
+    if (node.tierF < 0) node.tierF = tier;
+    node.tierF += (tier - node.tierF) * 0.04;
+    const tf = node.tierF;
+    const tierSize = TIERS[0].size + (TIERS[TIERS.length - 1].size - TIERS[0].size) * (tf / (TIERS.length - 1));
+    const baseR = 4.6 * (isMe ? 1.15 : style.sizeJitter) * tierSize * node.scale;
     node.core.scale.set(baseR, baseR, 1);
-    node.coreA += ((status === "dim" ? 0.35 : 0.95) - node.coreA) * 0.03;
+    node.coreA += ((status === "dim" ? 0.6 : 0.95) - node.coreA) * 0.03;
     node.core.material.opacity = node.coreA * vis;
 
-    const haloTargetR = style.haloScale * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 2.4);
+    const haloTargetR = style.haloScale * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 3.2);
     node.haloR += (haloTargetR - node.haloR) * 0.03;
     node.halo.scale.set(baseR * node.haloR, baseR * node.haloR, 1);
-    node.haloA += ((status === "online" ? 0.55 : status === "recent" ? 0.3 : 0.08) - node.haloA) * 0.03;
+    node.haloA += ((status === "online" ? 0.55 : status === "recent" ? 0.3 : 0.17) - node.haloA) * 0.03;
     node.halo.material.opacity = node.haloA * twinkle * vis;
 
     // "currently active" (declared something recently): an occasional flare
@@ -1517,9 +1636,9 @@ function frame(nowMs) {
       const phase = ((animClock / 1000 + style.moteSeed) % FLARE_PERIOD_S) / 0.9;
       if (phase < 1) flare = Math.sin(Math.PI * phase);
     }
-    const spikeBase = status === "online" ? 0.16 : status === "recent" ? 0.08 : 0.02;
+    const spikeBase = (status === "online" ? 0.16 : status === "recent" ? 0.08 : 0.03) + 0.07 * tf;
     node.spike.material.opacity = (spikeBase + flare * 0.75) * vis;
-    const spikeR = baseR * style.spikeLen * (1 + flare * 0.9);
+    const spikeR = baseR * style.spikeLen * (1 + 0.25 * tf) * (1 + flare * 0.9);
     node.spike.scale.set(spikeR, spikeR, 1);
 
     for (let i = 0; i < node.motes.length; i++) {
@@ -1530,6 +1649,38 @@ function frame(nowMs) {
       mote.scale.set(baseR * 0.45, baseR * 0.45, 1);
       mote.material.opacity = (status === "dim" ? 0.1 : 0.45) * vis;
     }
+
+    // Tier structure fades in as tierF crosses each threshold.
+    const step = (k) => Math.max(0, Math.min(1, tf - (k - 1)));
+    const dimMul = status === "dim" ? 0.6 : 1;
+    const spin = animate ? animClock * 0.001 * style.orbitSpin : 0;
+    const orbitR = baseR * 3.2;
+    node.orbitA.scale.set(orbitR, orbitR, 1);
+    node.orbitA.rotation.z = spin;
+    node.orbitA.material.opacity = 0.42 * step(2) * dimMul * vis;
+    const orbitR2 = baseR * 4.1;
+    node.orbitB.scale.set(orbitR2, orbitR2, 1);
+    node.orbitB.rotation.z = -spin * 0.7;
+    node.orbitB.material.opacity = 0.3 * step(3) * dimMul * vis;
+    const coronaPulse = animate ? 0.85 + 0.15 * Math.sin(animClock * 0.0009 + style.twinklePhase) : 1;
+    const coronaR = baseR * 6 * coronaPulse;
+    node.corona.scale.set(coronaR, coronaR, 1);
+    node.corona.material.rotation = animate ? animClock * 0.00005 * style.orbitSpin : 0;
+    node.corona.material.opacity = 0.32 * step(4) * dimMul * vis;
+    // Giants and up emit a slow sonar ping; a level-up fires one big ring.
+    const sinceUp = nowMs - node.levelUpAt;
+    let pulseA = 0, pulseR = baseR;
+    if (sinceUp < 1800) {
+      const u = sinceUp / 1800;
+      pulseR = baseR * (2 + u * 14);
+      pulseA = 0.9 * (1 - u) * (1 - u);
+    } else if (tf >= 2.5 && animate) {
+      const u = ((animClock / 1000 + style.moteSeed) % 4.5) / 4.5;
+      pulseR = baseR * (2 + u * 7);
+      pulseA = 0.22 * (1 - u) * step(3) * dimMul;
+    }
+    node.pulse.scale.set(pulseR, pulseR, 1);
+    node.pulse.material.opacity = pulseA * vis;
 
     node.ring.material.opacity = isMe && connectMode ? 0.5 + 0.3 * Math.sin(nowMs * 0.006) : 0;
     const ringR = baseR * 2.6;
@@ -1572,6 +1723,7 @@ function frame(nowMs) {
     node.halo.material.opacity *= 0.88;
     node.spike.material.opacity *= 0.88;
     for (const mote of node.motes) mote.material.opacity *= 0.88;
+    for (const m of [node.orbitA, node.orbitB, node.corona, node.pulse]) m.material.opacity *= 0.88;
     node.ring.material.opacity = 0;
     node.labelA *= 0.88;
     if (node.label) node.label.material.opacity *= 0.88;

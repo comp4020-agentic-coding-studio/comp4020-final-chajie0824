@@ -53,9 +53,25 @@ apart). All of it eases; nothing pops. The floating label reads like the
 design doc ("NAME / joined 14 Sep / N connections / last seen … / ← connected
 to you N days ago").
 
-**Identity is a fingerprint, never an avatar**: colour temperature, size, halo
-size, pulse rate, a faint four-point diffraction spike (angle/length) and 0–4
-orbiting motes, all derived from its id. Status transitions (online → recent
+**Identity is a fingerprint, never an avatar**: a stellar spectral class
+(O/B/A/F/G/K/M — real star colours, blue through white and yellow to orange
+and red), size jitter, halo size, pulse rate, a four-point diffraction spike
+(angle/length) and 0–4 orbiting motes, all derived from its id. The original
+palette was five near-whites; in use the sky read as monochrome dots, so it
+moved to the full spectral range (still real star colours, never saturated
+UI hues).
+
+**Magnitude: a star grows structure as it gathers connections** (`TIERS`,
+counted in distinct people, not events, so redeclaring one edge doesn't
+inflate it). nascent (0) is a bare core; main sequence (1+) adds halo and
+spike; bright (3+) adds a tilted HUD orbit ring with tick marks, a real 3D
+mesh so it foreshortens as the camera moves; giant (6+) a second crossed
+ring and a slow sonar ping; supergiant (10+) a ragged corona. Size and spike
+length scale with tier so the hierarchy reads from the overview distance,
+not only up close. Crossing a threshold live fires one large pulse ring
+(`levelUpAt`); History scrubbing never does. Offline stars keep enough
+halo (0.17) for their colour to show — online stars are still clearly
+brighter, so presence-as-light is unchanged. Status transitions (online → recent
 → dim) ease over a couple of seconds. "Currently active" = declared something
 in the last 10 minutes (`declaredAt` on events, from `edge_events.created_at`)
 and shows as an occasional flare of the spike — no badges, no "ONLINE" text.

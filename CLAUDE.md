@@ -70,6 +70,12 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   the thing. Decorative background stars/nebula are purely client-side and
   seeded with a fixed constant (`SKY_SEED`), not derived from real data — they
   must stay visually distinct from (smaller/dimmer than) actual people-stars.
+- **A star's look has two sources and they must not mix: colour (spectral
+  class) comes from its id, structure and size (magnitude tier) come from its
+  connections.** Never colour by tier or size by id. Tier counts distinct
+  people connected, not events. No numeric level badges or XP bars on the sky
+  — the tier shows as structure, and its name appears only in the hover
+  label. See `docs/DESIGN-NOTES.md` ("Magnitude").
 - **Idle motion ("animate sky" toggle) is real-time theatre, not the
   real-time requirement, and it's opt-in.** It's a purely client-side,
   `localStorage`-persisted viewer preference — never gate any actual feature

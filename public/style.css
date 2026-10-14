@@ -141,6 +141,7 @@ button:hover { opacity: 0.85; }
 .floating .label-name { font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; display: block; margin-bottom: 0.25rem; }
 .floating .label-meta { color: var(--faint); font-family: var(--mono); font-size: 0.72rem; display: block; }
 .floating .label-you { color: var(--accent); margin-top: 0.2rem; }
+.floating .label-class { color: var(--accent); letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.66rem; }
 
 /* --- hud --- */
 #hud {
