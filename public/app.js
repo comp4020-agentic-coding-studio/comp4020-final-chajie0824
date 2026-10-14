@@ -1614,6 +1614,84 @@ function noteSpectacle(stars, edges) {
   knownStarIds = new Set(stars.map((s) => s.id));
   knownEventCounts = new Map(edges.map((e) => [e.id, e.eventCount]));
 }
+// Stellar surface: when the camera comes within close range of a star, a
+// small sphere fades in at its core with a boiling granulation shader
+// (convection cells, like the Sun's photosphere) in its spectral colour,
+// with limb darkening. One shared mesh that follows whichever star is
+// closest, so it costs nothing at overview distance.
+const surfaceMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  uniforms: { uTime: { value: 0 }, uColor: { value: new THREE.Color(1, 1, 1) }, uAlpha: { value: 0 } },
+  vertexShader: `
+    varying vec3 vN; varying vec3 vP; varying vec3 vView;
+    void main() {
+      vN = normalize(normalMatrix * normal);
+      vP = position;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      vView = normalize(-mv.xyz);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform float uTime; uniform vec3 uColor; uniform float uAlpha;
+    varying vec3 vN; varying vec3 vP; varying vec3 vView;
+    // cellular noise: distance to the nearest jittered cell centre
+    vec3 hash3(vec3 p) {
+      p = vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)));
+      return fract(sin(p) * 43758.5453);
+    }
+    float cells(vec3 p) {
+      vec3 i = floor(p); vec3 f = fract(p); float d = 1.0;
+      for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+        vec3 o = vec3(float(x), float(y), float(z));
+        vec3 h = hash3(i + o);
+        h = 0.5 + 0.5 * sin(uTime * 0.6 + 6.2831 * h);
+        d = min(d, length(o + h - f));
+      }
+      return d;
+    }
+    void main() {
+      vec3 p = normalize(vP);
+      float g = cells(p * 7.0) * 0.65 + cells(p * 15.0 + 3.1) * 0.35;
+      float gran = smoothstep(0.05, 0.75, g);        // bright cell centres, dark lanes
+      float limb = pow(max(0.0, dot(vN, vView)), 0.55); // darker toward the edge
+      vec3 hot = mix(uColor, vec3(1.0), 0.45);
+      vec3 col = mix(uColor * 0.22, hot * 0.8, 1.0 - gran) * (0.3 + 0.7 * limb);
+      gl_FragColor = vec4(col, uAlpha * (0.25 + 0.75 * limb));
+    }`,
+});
+const surface = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 32), surfaceMat);
+surface.visible = false;
+scene.add(surface);
+const SURFACE_NEAR = 70, SURFACE_FAR = 170;
+let surfaceA = 0;
+function stepSurface(stars, nowMs) {
+  let best = null, bestD = Infinity;
+  for (const st of stars) {
+    const node = starNodes.get(st.id);
+    if (!node || node.scale < 0.5) continue;
+    const d = camera.position.distanceTo(node.group.position);
+    if (d < bestD) { bestD = d; best = { st, node }; }
+  }
+  const near = best ? 1 - Math.min(1, Math.max(0, (bestD - SURFACE_NEAR) / (SURFACE_FAR - SURFACE_NEAR))) : 0;
+  surfaceA += (near - surfaceA) * 0.08;
+  surface.visible = surfaceA > 0.01 && !!best;
+  if (!surface.visible) return;
+  surface.position.copy(best.node.group.position);
+  const r = best.node.core.scale.x * 0.38;
+  surface.scale.set(r, r, r);
+  surface.rotation.y = (animate ? animClock * 0.00004 : 0);
+  surfaceMat.uniforms.uTime.value = animate ? animClock / 1000 : 0;
+  surfaceMat.uniforms.uColor.value.setHex(styleFor(best.st.id).color.hex);
+  surfaceMat.uniforms.uAlpha.value = surfaceA * 0.95;
+  // Step the glare down as the surface comes in, or bloom washes the cells out.
+  const glare = 1 - surfaceA * 0.85;
+  best.node.core.material.opacity *= glare;
+  best.node.halo.material.opacity *= 1 - surfaceA * 0.6;
+  best.node.spike.material.opacity *= glare;
+}
+
 // Cluster nebulae: every group of 3+ people joined by connections gets a
 // faint cloud behind it, tinted by its members' spectral colours and sized
 // to how far they spread. Unlike the decorative nebula wash (fixed seed,
@@ -2010,6 +2088,7 @@ function frame(nowMs) {
   updateConnections(animClock, drawState.edges, focusId);
   stepShockwaves(nowMs);
   stepClusterNebulae(drawState.stars, drawState.edges);
+  stepSurface(drawState.stars, nowMs);
 
   // gravity preview while in connect-mode and hovering someone else
   if (connectMode && me && hoverStarId && hoverStarId !== me.id) {
