@@ -433,7 +433,9 @@ function disposeSprite(sprite) {
   sprite.material.dispose();
 }
 
-// --- background dust + nebula wash (purely decorative, fixed seed) --------
+// --- background dust (purely decorative, fixed seed) ---------------------
+// There used to be a blue nebula wash here too; zoomed out it read as haze
+// over the whole sky, so it was removed (2026-10-14).
 const SKY_SEED = 1337;
 (function buildDust() {
   const rand = mulberry32(SKY_SEED);
@@ -461,20 +463,6 @@ const SKY_SEED = 1337;
   });
   const dust = new THREE.Points(geom, mat);
   scene.add(dust);
-
-  for (let i = 0; i < 2; i++) {
-    const r = 900 + rand() * 900;
-    const theta = rand() * Math.PI * 2;
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      // tuned for the bloom pipeline's linear compositing, where the dark end
-      // is lifted on output: 0.05 here (the pre-bloom value) washes the sky
-      map: haloTexture, color: 0x6a7bd6, transparent: true, opacity: 0.03,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    }));
-    sprite.position.set(Math.cos(theta) * r, (rand() - 0.5) * 300, Math.sin(theta) * r);
-    sprite.scale.set(1800, 1800, 1);
-    scene.add(sprite);
-  }
 
   window.__dust = dust;
 })();

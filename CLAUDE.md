@@ -65,11 +65,13 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   (no stat counters, no leaderboards) on the main view — if a feature wants a
   stats page, it belongs behind `/readme/` or a separate route, not layered
   onto the sky. But "restrained" is about clutter, not fidelity: the sky
-  itself (background starfield, nebula wash, per-star colour/size variety,
+  itself (background starfield, per-star colour/size variety,
   glow) is allowed to be as rich as it wants, since that's the whole point of
-  the thing. Decorative background stars/nebula are purely client-side and
+  the thing. Decorative background stars are purely client-side and
   seeded with a fixed constant (`SKY_SEED`), not derived from real data — they
   must stay visually distinct from (smaller/dimmer than) actual people-stars.
+  There is no nebula wash: zoomed out it read as blue haze over the sky, so
+  the background stays black.
   **Connections stay plain arcs in their declarer's colour.** A double helix
   on mutual edges, redshifting old strands toward red, and a tinted nebula
   behind each cluster were all built and then removed (2026-10-14): together

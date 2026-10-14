@@ -64,5 +64,5 @@ The early sky is real people, but its history was backfilled by me from
 memory: who I met when and roughly how often, entered with approximate dates
 spread across days. Everything declared on the live site since is exactly as
 it happened, with two exceptions I made by hand on the database: duplicate
-stars left over from before a name was the key were merged away, and two
-people were taken out of the sky at my request, with their connections.
+stars left over from before a name was the key were merged away, and a few
+stars and connections were taken out at my request to thin a crowded sky.
