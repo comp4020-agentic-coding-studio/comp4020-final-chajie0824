@@ -545,6 +545,21 @@ function nodeFor(star) {
 // events visibly read as separate threads, plus a small travelling photon.
 const STRAND_SAMPLES = 18;
 const strands = new Map(); // "edgeId:i" -> {line, photon, color, speed, phase, seed}
+// Redshift: old light is redder. A strand starts in its declarer's colour
+// and drifts toward deep red as the event it stands for recedes into the
+// past — the README's "a friendship from last year is fainter old light,
+// not deleted", drawn as colour. Measured against History's date when
+// scrubbing, so dragging the timeline shows light reddening. Much slower
+// than brightness's 21-day half-life, so old friends don't all turn red.
+const REDSHIFT_DAYS = 240;
+const OLD_LIGHT = new THREE.Color(0xff5a3c);
+const tmpColor = new THREE.Color();
+function redshifted(baseHex, occurredOn, nowMs) {
+  const ageDays = Math.max(0, (nowMs - new Date(occurredOn).getTime()) / 86_400_000);
+  const k = 1 - Math.exp(-ageDays / REDSHIFT_DAYS);
+  return tmpColor.setHex(baseHex).lerp(OLD_LIGHT, k * 0.85);
+}
+
 function strandFor(key, color) {
   let s = strands.get(key);
   if (!s) {
@@ -609,6 +624,10 @@ function updateConnections(nowMs, drawEdges, focusId) {
       const seed = Math.abs(hashString(key));
       const color = (styleFor(ev.declaredBy).color);
       const strand = strandFor(key, color.hex);
+      const asOfMs = historyMode && historyAsOf ? historyAsOf.getTime() : Date.now();
+      const shifted = redshifted(color.hex, ev.occurredOn, asOfMs);
+      strand.line.material.color.copy(shifted);
+      strand.photon.material.color.copy(shifted);
 
       const angle = (seed % 628) / 100;
       const mag = 16 + (i % 6) * 10 + (n > 1 ? 14 : 0);
