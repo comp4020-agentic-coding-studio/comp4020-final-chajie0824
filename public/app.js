@@ -1868,7 +1868,17 @@ function frame(nowMs) {
     node.scale += (1 - node.scale) * (intro && isMe ? 0.025 : 0.04);
     const reveal = isMe ? 1 : revealMul;
     const related = !focusId || star.id === focusId || isMe || neighbours.has(star.id);
-    node.attn += ((related ? 1 : 0.4) - node.attn) * 0.06;
+    // Depth cue while focused: an unrelated star dims more the further it
+    // sits from the focused star's depth, so the focus reads as a plane in
+    // a deep field. (A real BokehPass was tried and dropped: nothing here
+    // writes depth, so it blurred the whole sky, focus included.)
+    let attnTarget = related ? 1 : 0.4;
+    if (focusId && !related) {
+      const fp = physicsFor(focusId);
+      const dz = Math.abs(camera.position.distanceTo(node.group.position) - camera.position.distanceTo(clusterCentre.set(fp.x, fp.y, fp.z)));
+      attnTarget = Math.max(0.12, 0.45 - dz / 1400);
+    }
+    node.attn += (attnTarget - node.attn) * 0.06;
     const vis = node.scale * reveal * node.attn;
 
     const twinkle = animate && status === "online"
