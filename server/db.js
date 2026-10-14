@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, createHash } from "node:crypto";
 
 const DB_PATH = process.env.DB_PATH ?? "/data/constellation.db";
 
@@ -32,6 +32,14 @@ db.exec(`
     occurred_on TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  -- A browser proves it owns a star with a random secret, never with the
+  -- star's id: ids are public in every snapshot. Only the hash is stored.
+  CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    star_id TEXT NOT NULL REFERENCES stars(id),
+    created_at TEXT NOT NULL
+  );
 `);
 
 // `note` was added after the first deploy; the live volume's table predates
@@ -60,6 +68,29 @@ export function createStar(pseudonym) {
 
 export function getStar(id) {
   return db.prepare("SELECT * FROM stars WHERE id = ?").get(id) ?? null;
+}
+
+function hashToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+export function createSession(starId) {
+  const token = randomBytes(32).toString("base64url");
+  db.prepare("INSERT INTO sessions (token_hash, star_id, created_at) VALUES (?, ?, ?)").run(
+    hashToken(token),
+    starId,
+    new Date().toISOString(),
+  );
+  return token;
+}
+
+export function getSessionStar(token) {
+  const row = db.prepare("SELECT star_id FROM sessions WHERE token_hash = ?").get(hashToken(token));
+  return row ? getStar(row.star_id) : null;
+}
+
+export function deleteSession(token) {
+  db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
 }
 
 export function pseudonymExists(pseudonym) {

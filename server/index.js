@@ -2,8 +2,11 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { marked } from "marked";
 import {
-  createStar,
   getStar,
+  createStar,
+  createSession,
+  getSessionStar,
+  deleteSession,
   pseudonymExists,
   touchStar,
   renameStar,
@@ -13,7 +16,12 @@ import {
 } from "./db.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
-const COOKIE_NAME = "star_id";
+// The cookie holds a random session secret, not the star's id. Ids are public
+// (every snapshot lists them), so a cookie that was just the id let anyone
+// become anyone. The old `star_id` cookie is cleared, never trusted.
+const COOKIE_NAME = "session";
+const LEGACY_COOKIE = "star_id";
+const COOKIE_ATTRS = "Path=/; HttpOnly; SameSite=Lax; Secure";
 // Lets the site owner backfill real history between two *other* people's
 // stars (declaring on their behalf, e.g. "Alice and Bob met in July"),
 // which the normal /api/connect flow can't do since it always declares from
@@ -52,12 +60,26 @@ function send(res, status, body, headers = {}) {
 }
 
 function currentStar(req) {
-  const id = parseCookies(req)[COOKIE_NAME];
-  if (!id) return null;
-  const star = getStar(id);
+  const token = parseCookies(req)[COOKIE_NAME];
+  if (!token) return null;
+  const star = getSessionStar(token);
   if (!star) return null;
-  touchStar(id);
+  touchStar(star.id);
   return star;
+}
+
+// One line per thing a person did, so `flyctl logs` reads as who-did-what.
+// `who` is the pseudonym plus the first 6 characters of the star id, since
+// two people can share a name. Anyone without a session is `anon`.
+function tag(star) {
+  return star ? `${JSON.stringify(star.pseudonym)}#${star.id.slice(0, 6)}` : "anon";
+}
+
+function log(event, fields) {
+  const parts = Object.entries(fields)
+    .filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${k}=${typeof v === "string" && !/^"/.test(v) && /\s/.test(v) ? JSON.stringify(v) : v}`);
+  console.log([new Date().toISOString(), event.padEnd(10), ...parts].join(" "));
 }
 
 // Real-time push over server-sent events. Every open /api/stream is a viewer;
@@ -86,12 +108,14 @@ function openStream(req, res) {
   });
   res.write("retry: 2000\n\n");
   streams.add(res);
+  log("open", { who: tag(star), viewers: streams.size });
   if (star) openStreamsByStar.set(star.id, (openStreamsByStar.get(star.id) ?? 0) + 1);
   // Fly's proxy drops idle connections, so keep a comment line flowing.
   const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 20_000);
   req.on("close", () => {
     clearInterval(keepAlive);
     streams.delete(res);
+    log("close", { who: tag(star), viewers: streams.size });
     if (star) {
       const left = (openStreamsByStar.get(star.id) ?? 1) - 1;
       if (left > 0) openStreamsByStar.set(star.id, left);
@@ -163,15 +187,29 @@ const server = createServer(async (req, res) => {
     // that'd fight the append-only principle above — it just clears the
     // cookie; the old star stays in the sky, now un-owned by any browser.
     if (req.method === "POST" && url.pathname === "/api/forget") {
-      res.setHeader("set-cookie", `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+      const star = currentStar(req);
+      const token = parseCookies(req)[COOKIE_NAME];
+      if (token) deleteSession(token);
+      res.setHeader("set-cookie", [
+        `${COOKIE_NAME}=; ${COOKIE_ATTRS}; Max-Age=0`,
+        `${LEGACY_COOKIE}=; ${COOKIE_ATTRS}; Max-Age=0`,
+      ]);
+      log("forget", { who: tag(star) });
       return send(res, 200, { ok: true });
     }
 
     if (req.method === "POST" && url.pathname === "/api/claim") {
-      if (currentStar(req)) return send(res, 400, { error: "already claimed a star in this browser" });
+      const already = currentStar(req);
+      if (already) {
+        log("reject", { who: tag(already), action: "claim", reason: "already has a star" });
+        return send(res, 400, { error: "already claimed a star in this browser" });
+      }
       const { pseudonym, confirmDuplicate } = await readJsonBody(req);
       const name = String(pseudonym ?? "").trim().slice(0, 40);
-      if (!name) return send(res, 400, { error: "pseudonym can't be empty" });
+      if (!name) {
+        log("reject", { who: "anon", action: "claim", reason: "empty pseudonym" });
+        return send(res, 400, { error: "pseudonym can't be empty" });
+      }
       // A gentle, non-blocking heads-up when the name is already in the sky —
       // never a hard reject (two different people can share a name, and
       // "forget" never deletes the old star either — see CLAUDE.md). The
@@ -181,10 +219,12 @@ const server = createServer(async (req, res) => {
         return send(res, 200, { duplicate: true });
       }
       const star = createStar(name);
-      res.setHeader(
-        "set-cookie",
-        `${COOKIE_NAME}=${star.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
-      );
+      const token = createSession(star.id);
+      res.setHeader("set-cookie", [
+        `${COOKIE_NAME}=${token}; ${COOKIE_ATTRS}; Max-Age=31536000`,
+        `${LEGACY_COOKIE}=; ${COOKIE_ATTRS}; Max-Age=0`,
+      ]);
+      log("claim", { who: tag(star) });
       send(res, 200, { star: { id: star.id, pseudonym: star.pseudonym } });
       return broadcast();
     }
@@ -199,19 +239,26 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/connect") {
       const star = currentStar(req);
-      if (!star) return send(res, 401, { error: "claim a star first" });
+      if (!star) {
+        log("reject", { who: "anon", action: "connect", reason: "no session" });
+        return send(res, 401, { error: "claim a star first" });
+      }
       const { to, type, occurredOn, note } = await readJsonBody(req);
+      const target = getStar(String(to ?? ""));
       try {
         const edge = declareConnection(star.id, to, type, occurredOn, note);
+        log("connect", { who: tag(star), to: tag(target), type, on: occurredOn, edge: edge.id.slice(0, 6) });
         send(res, 200, { edge });
         return broadcast();
       } catch (err) {
+        log("reject", { who: tag(star), action: "connect", to: target ? tag(target) : String(to ?? ""), reason: err.message });
         return send(res, 400, { error: err.message });
       }
     }
 
     if (req.method === "POST" && url.pathname === "/api/admin/connect") {
       if (!ADMIN_KEY || req.headers["x-admin-key"] !== ADMIN_KEY) {
+        if (ADMIN_KEY) log("reject", { who: tag(currentStar(req)), action: "admin", reason: "bad admin key" });
         res.writeHead(404, { "content-type": "text/plain" });
         return res.end("not found");
       }
@@ -219,20 +266,26 @@ const server = createServer(async (req, res) => {
       try {
         const edge = declareConnection(fromId, toId, type, occurredOn, note);
         if (mutual) declareConnection(toId, fromId, type, occurredOn, note);
+        log("admin", { from: tag(getStar(fromId)), to: tag(getStar(toId)), type, on: occurredOn, mutual: !!mutual });
         send(res, 200, { edge });
         return broadcast();
       } catch (err) {
+        log("reject", { who: "admin", action: "admin", reason: err.message });
         return send(res, 400, { error: err.message });
       }
     }
 
     if (req.method === "PATCH" && url.pathname === "/api/me") {
       const star = currentStar(req);
-      if (!star) return send(res, 401, { error: "claim a star first" });
+      if (!star) {
+        log("reject", { who: "anon", action: "rename", reason: "no session" });
+        return send(res, 401, { error: "claim a star first" });
+      }
       const { pseudonym } = await readJsonBody(req);
       const name = String(pseudonym ?? "").trim().slice(0, 40);
       if (!name) return send(res, 400, { error: "pseudonym can't be empty" });
       const updated = renameStar(star.id, name);
+      log("rename", { who: tag(star), to: JSON.stringify(name) });
       send(res, 200, { star: { id: updated.id, pseudonym: updated.pseudonym } });
       return broadcast();
     }
@@ -247,6 +300,7 @@ const server = createServer(async (req, res) => {
     res.writeHead(404, { "content-type": "text/plain" });
     res.end("not found");
   } catch (err) {
+    log("error", { path: req.url, reason: err.message });
     console.error(err);
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "internal error" }));
