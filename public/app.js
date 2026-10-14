@@ -7,6 +7,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
+import { sfx, soundEnabled, setSoundEnabled } from "./audio.js";
 
 const HALF_LIFE_DAYS = 21; // mirrors server/db.js — needed to recompute historical brightness client-side
 
@@ -69,6 +70,11 @@ animateCheckbox.addEventListener("change", () => {
   animate = animateCheckbox.checked;
   try { localStorage.setItem("constellation:animate", animate ? "1" : "0"); } catch {}
 });
+// sound is the same kind of viewer preference (public/audio.js)
+const soundCheckbox = document.getElementById("sound-checkbox");
+soundCheckbox.checked = soundEnabled();
+soundCheckbox.addEventListener("change", () => setSoundEnabled(soundCheckbox.checked));
+const clsOf = (id) => styleFor(id).color.cls;
 
 // --- deterministic seeds -----------------------------------------------
 function mulberry32(seed) {
@@ -717,6 +723,7 @@ const FLARE_PERIOD_S = 7;
 let focusStarId = null;
 let focusReturnRadius = null;
 function focusStar(id) {
+  if (id !== focusStarId) sfx.focus(clsOf(id));
   if (!focusStarId) focusReturnRadius = cam.desired.radius;
   focusStarId = id;
   cam.desired.radius = Math.min(cam.desired.radius, 360);
@@ -888,6 +895,7 @@ function updateHover(e) {
   const id = star ? star.id : null;
   if (id === hoverStarId) return;
   if (id) {
+    sfx.hover(clsOf(id));
     hoverSince = performance.now();
     hoverAnchor = screenPosOf(id, camera);
   } else {
@@ -917,6 +925,7 @@ function flyAlongEdge(edge, sx, sy) {
     fromId: from, toId: from === edge.starA ? edge.starB : edge.starA, edge,
     start: performance.now(), duration: 3200, startTarget: cam.target.clone(),
   };
+  sfx.travel();
   cam.desired.radius = 200;
 }
 function stepFlight(nowMs) {
@@ -931,6 +940,7 @@ function stepFlight(nowMs) {
     const { toId, edge } = flight;
     flight = null;
     focusStarId = toId;
+    sfx.arrive();
     openTimeline(edge);
   }
 }
@@ -952,6 +962,7 @@ function onCanvasClick(e) {
   if (star) {
     if (me && star.id === me.id) {
       connectMode = !connectMode;
+      sfx.connectMode(connectMode);
       setHint();
       return;
     }
@@ -1099,6 +1110,7 @@ birthForm.addEventListener("submit", async (e) => {
     await pollState();
     await refreshMe();
     connectStream();
+    if (data.returning) sfx.enter(); else sfx.birth();
     startIntro(data.returning ? "arrival" : "birth");
   } else {
     alert(data.error);
@@ -1121,6 +1133,7 @@ function openConnectPanel(star, adminFromStarId) {
     connectMutual.checked = true;
   }
   connectPanel.classList.remove("hidden");
+  sfx.panel();
 }
 connectCancel.addEventListener("click", () => {
   connectPanel.classList.add("hidden");
@@ -1161,6 +1174,7 @@ connectForm.addEventListener("submit", async (e) => {
     return;
   }
   connectPanel.classList.add("hidden");
+  sfx.connect();
   if (me && selectedTargetId) beginTravel(me.id, selectedTargetId);
   connectMode = false; setHint();
   await pollState();
@@ -1540,6 +1554,7 @@ function noteSpectacle(stars, edges) {
     for (const s of stars) {
       if (knownStarIds.has(s.id)) continue;
       spawnShockwave(s.id, true);
+      if (!(me && s.id === me.id)) sfx.newStar();
       if (!(me && s.id === me.id)) spawnSpectacleLabel(s.id, `${s.pseudonym} joined the sky`);
     }
   }
@@ -1552,7 +1567,10 @@ function noteSpectacle(stars, edges) {
         if (strand) strand.bornAt = undefined; // replay the fade-in for the newest strand
       }
       const from = e.events?.[newestEventIndex(e.events)]?.declaredBy;
-      if (from && !(me && from === me.id)) beginTravel(from, from === e.starA ? e.starB : e.starA);
+      if (from && !(me && from === me.id)) {
+        sfx.otherConnect();
+        beginTravel(from, from === e.starA ? e.starB : e.starA);
+      }
     }
   }
   knownStarIds = new Set(stars.map((s) => s.id));
@@ -1803,6 +1821,7 @@ function frame(nowMs) {
     if (node.tier >= 0 && tier > node.tier && !historyMode) {
       node.levelUpAt = nowMs;
       spawnShockwave(star.id, tier === TIERS.length - 1);
+      sfx.levelUp();
     }
     node.tier = tier;
     if (node.tierF < 0) node.tierF = tier;

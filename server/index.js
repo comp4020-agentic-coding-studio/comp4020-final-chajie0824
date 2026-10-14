@@ -177,7 +177,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/style.css")) {
+    if (req.method === "GET" && (url.pathname === "/app.js" || url.pathname === "/audio.js" || url.pathname === "/style.css")) {
       const ext = url.pathname.endsWith(".js") ? ".js" : ".css";
       res.writeHead(200, { "content-type": MIME[ext] });
       res.end(await readFile(new URL(`../public${url.pathname}`, import.meta.url)));

@@ -76,6 +76,14 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   they turned the sky into noise and chajie judged it uglier than before.
   Don't bring back a per-edge shape or colour effect without comparing a
   screenshot of the live sky against the current one first.
+- **Sound is synthesised in `public/audio.js` with the Web Audio API — no
+  audio files, no library.** The ambient bed and every cue go through one
+  master gain behind the `sound` toggle (a `localStorage` viewer preference
+  like `animate`, never gating a feature). Nothing plays before the first
+  click or key press. Cues stay short and in the pentatonic scale so they
+  can overlap without clashing; a star's own note comes from its spectral
+  class. A new static file must also be added to the server's whitelist in
+  `server/index.js`.
 - **A star's look has two sources and they must not mix: colour (spectral
   class) comes from its id, structure and size (magnitude tier) come from its
   connections.** Never colour by tier or size by id. Tier counts distinct
