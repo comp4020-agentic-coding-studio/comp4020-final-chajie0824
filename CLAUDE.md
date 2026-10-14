@@ -37,9 +37,20 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   shows as glow/twinkle and "here now" on hover — no who's-here list, no
   arrival/departure messages, no typing or cursor indicators. Those were
   considered and rejected in the ADR; don't add them without revisiting it.
-- **Structured logging with a live activity view is the next crit's work
-  ("Fly by instruments"), not something to fold in early.** Re-check the course
-  site for the week before relying on it.
+- **A browser acts as a star only through its `session` cookie, a random
+  secret whose sha256 is in `sessions`.** Never trust a star id from a cookie,
+  header or body as "who is asking" — ids are public in every snapshot. Any
+  new write route resolves the actor with `currentStar(req)` and treats ids
+  in the body only as the *other* party. The legacy `star_id` cookie is
+  cleared, never read. Decision and table of who can do what:
+  `docs/adr/0002-who-can-see-and-change-what.md`; checked by
+  `spec/permissions.test.ts`.
+- **Every action and every refusal logs one line through `log()`, with
+  `who=tag(star)`.** That's what `flyctl logs` is read from at the crit and
+  afterwards. A new write route isn't done until it logs both its success and
+  its rejections. Keep lines short `key=value` text (readable aloud), never
+  log the session token, and don't add an in-app activity feed — the logs are
+  for the operator, not chrome on the sky (ADR 0002).
 - **The connection timeline stays public** (visible to anyone viewing the
   sky, not gated to the two people in it). This was a deliberate trade-off
   for demo reliability, decided explicitly — don't "fix" it into a private
@@ -83,8 +94,9 @@ live in `docs/DESIGN-NOTES.md` — read that when you need the "why", not here.
   weaken the append-only rule above. Client-side it's gated behind a
   `Shift+A` shortcut + a key typed once into `localStorage`, not surfaced in
   the normal UI.
-- **"Forget this star" (`POST /api/forget`) only unlinks the browser's
-  cookie — it never deletes the star or any of its history.** The cookie is
+- **"Forget this star" (`POST /api/forget`) only unlinks the browser — it
+  deletes the session row and clears the cookie, but never deletes the star
+  or any of its history.** The cookie is
   `HttpOnly`, so a client-side fix alone can't clear it; this needed a real
   server route, not a `document.cookie` hack. Deleting the star to "start
   fresh" would contradict the append-only rule above in spirit, even though

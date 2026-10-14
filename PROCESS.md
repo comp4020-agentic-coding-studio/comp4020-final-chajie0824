@@ -155,7 +155,43 @@ a second, and that a star is online exactly while its owner's stream is open.
 I also had the agent drive two headless Chrome sessions: one claimed a star
 and the other's page updated in about 200 ms, with no console errors.
 
-## Next
+## Crit 10: fly by instruments
 
-Crit 10 ("Fly by instruments") is structured server-side logging and a live
-activity view. The SSE stream is the obvious carrier for that view.
+The crit asks the app to tell people apart, decide on the server what each
+may see and change, and log who did what, so I can narrate a demo from
+`flyctl logs` without touching the app.
+
+**Audit before building.** I started by asking the agent to read the server
+against the brief rather than add logging straight away. It found a real hole:
+the cookie was the star's id, and every snapshot publishes every id. Setting
+`star_id=<someone else's id>` let you rename them or declare connections as
+them, which is exactly the brief's failure case. I'd been treating "multi-user"
+as done since crit 8 because two browsers looked different, and nobody had
+tried to be someone else.
+
+**Fix: a session secret.** Claiming now mints a random token and stores only
+its hash; every write resolves the actor from that token, and forget revokes
+it on the server
+([`0264917`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/0264917)).
+I chose that over signing the id because a signed id can't be revoked, and
+over passwords because the README promises entering takes one name. The old
+`star_id` cookie is cleared, never trusted, so my own demo browsers had to
+claim fresh stars. The decision, the who-can-do-what table and the rejected
+alternatives are in `docs/adr/0002-who-can-see-and-change-what.md`.
+
+**Logging.** One `key=value` line per action and per refusal, naming the actor
+as `"pseudonym"#id6` because names repeat. I kept it plain text rather than
+JSON because the point is reading it aloud in the crit. An in-app activity
+view was the obvious next step from the last "Next" note, and I dropped it:
+it would be dashboard chrome on the sky, and the logs are for whoever runs the
+app, not for visitors.
+
+**Checking it.** `spec/permissions.test.ts` forges a `star_id` cookie and
+checks it can neither rename nor connect, checks that renaming touches only
+your own star, and that a copied cookie stops working after forget. I also had
+the agent run two scripted users against a scratch server and read the log
+back to confirm each line named the right person.
+
+**Harness.** `CLAUDE.md` swapped the "logging is next crit's work" note for
+two rules: actors come only from `currentStar()`, and a write route isn't done
+until it logs both its success and its rejections.
