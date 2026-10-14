@@ -3,6 +3,10 @@
 // sky instead of a flat network graph. See CLAUDE.md for the architecture
 // decision behind adopting Three.js here (client-only, zero server cost).
 import * as THREE from "three";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
 const HALF_LIFE_DAYS = 21; // mirrors server/db.js — needed to recompute historical brightness client-side
 
@@ -208,15 +212,36 @@ function stepPhysics(dt) {
 }
 
 // --- three.js scene --------------------------------------------------------
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
 renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
 renderer.setClearColor(0x05070b, 1);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 6000);
 
+// Bloom: bright cores and supergiant coronas genuinely spill light, so
+// brightness (which comes from how recent and frequent connections are)
+// reads as light rather than as a sprite. Lighter on small screens.
+// OutputPass does the one sRGB conversion at the end; no tone mapping, so
+// the near-black sky stays near-black.
+renderer.toneMapping = THREE.NoToneMapping;
+// The sky colour is scene.background, not the renderer's clear colour: the
+// clear colour skips colour management inside the composer and came out
+// slate blue (38,46,59 instead of 5,7,11), while a background Color is
+// converted correctly. Checked with a minimal three@0.169 repro.
+scene.background = new THREE.Color(0x05070b);
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const SMALL_SCREEN = Math.min(window.innerWidth, window.innerHeight) < 600;
+// High threshold: only genuinely bright cores bloom, never the decorative
+// dust or nebula.
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), SMALL_SCREEN ? 0.5 : 0.75, 0.4, 0.62);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -260,9 +285,13 @@ function makeRadialTexture(inner, outer, mid) {
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d");
-  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  // inset by a pixel so the outermost ring is exactly transparent — under
+  // bloom's linear compositing any alpha left at the edge showed the
+  // sprite's square outline
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2 - 1);
   grad.addColorStop(0, inner);
   if (mid) grad.addColorStop(0.6, mid);
+  grad.addColorStop(0.85, mid ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.03)");
   grad.addColorStop(1, outer);
   g.fillStyle = grad;
   g.fillRect(0, 0, size, size);
@@ -341,22 +370,30 @@ const coronaTexture = (() => {
   return new THREE.CanvasTexture(c);
 })();
 
-// faint four-point diffraction spike: two thin, centre-weighted crossed lines
+// faint four-point diffraction spike: two thin crossed lines that taper to a
+// point at each end and fade toward the centre too, so where they cross
+// doesn't stack into a bright square under bloom
 const spikeTexture = (() => {
   const size = 256;
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d");
+  const h = size / 2;
   for (const horizontal of [true, false]) {
     const grad = horizontal
       ? g.createLinearGradient(0, 0, size, 0)
       : g.createLinearGradient(0, 0, 0, size);
     grad.addColorStop(0, "rgba(255,255,255,0)");
-    grad.addColorStop(0.5, "rgba(255,255,255,1)");
+    grad.addColorStop(0.42, "rgba(255,255,255,0.9)");
+    grad.addColorStop(0.5, "rgba(255,255,255,0.35)");
+    grad.addColorStop(0.58, "rgba(255,255,255,0.9)");
     grad.addColorStop(1, "rgba(255,255,255,0)");
     g.fillStyle = grad;
-    if (horizontal) g.fillRect(0, size / 2 - 1.5, size, 3);
-    else g.fillRect(size / 2 - 1.5, 0, 3, size);
+    g.beginPath();
+    if (horizontal) { g.moveTo(0, h); g.lineTo(h, h - 1.5); g.lineTo(size, h); g.lineTo(h, h + 1.5); }
+    else { g.moveTo(h, 0); g.lineTo(h + 1.5, h); g.lineTo(h, size); g.lineTo(h - 1.5, h); }
+    g.closePath();
+    g.fill();
   }
   return new THREE.CanvasTexture(c);
 })();
@@ -421,7 +458,9 @@ const SKY_SEED = 1337;
     const r = 900 + rand() * 900;
     const theta = rand() * Math.PI * 2;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: haloTexture, color: 0x6a7bd6, transparent: true, opacity: 0.05,
+      // tuned for the bloom pipeline's linear compositing, where the dark end
+      // is lifted on output: 0.05 here (the pre-bloom value) washes the sky
+      map: haloTexture, color: 0x6a7bd6, transparent: true, opacity: 0.03,
       blending: THREE.AdditiveBlending, depthWrite: false,
     }));
     sprite.position.set(Math.cos(theta) * r, (rand() - 0.5) * 300, Math.sin(theta) * r);
@@ -1620,7 +1659,8 @@ function frame(nowMs) {
     const tierSize = TIERS[0].size + (TIERS[TIERS.length - 1].size - TIERS[0].size) * (tf / (TIERS.length - 1));
     const baseR = 4.6 * (isMe ? 1.15 : style.sizeJitter) * tierSize * node.scale;
     node.core.scale.set(baseR, baseR, 1);
-    node.coreA += ((status === "dim" ? 0.6 : 0.95) - node.coreA) * 0.03;
+    // capped below 1: under bloom an overexposed core blows out to a square
+    node.coreA += ((status === "dim" ? 0.55 : 0.78) - node.coreA) * 0.03;
     node.core.material.opacity = node.coreA * vis;
 
     const haloTargetR = style.haloScale * (status === "online" ? 6.5 : status === "recent" ? 4.5 : 3.2);
@@ -1805,7 +1845,7 @@ function frame(nowMs) {
   if (introDrivesCamera) { /* arrival placed the camera already */ }
   else if (storyMode) stepStory(dt);
   else applyCamera();
-  renderer.render(scene, camera);
+  composer.render();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
