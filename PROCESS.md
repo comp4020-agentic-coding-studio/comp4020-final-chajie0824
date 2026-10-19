@@ -1,128 +1,130 @@
-# Process overview
+# Making Constellation
 
-## From the brief to one sentence
+## Finding a direction
 
-I started by discussing the idea with the agent before writing code. I wanted
-something more personal than a graph of dots and lines, but I was not sure
-what that should be. The idea I settled on was that a good shared space
-remembers the people who shaped it. This gave me a way to connect the brief's
-multi-user, real-time and persistent requirements. It also helped me leave out
-features like chat, profiles, likes and friend requests.
+Before implementation, I talked through the idea with the agent. I knew I
+wanted to represent people and relationships, but a basic graph did not feel
+personal enough. Eventually I settled on a shared sky that remembers the
+people who shaped it. This gave the multi-user, real-time and persistent parts
+of the brief a common purpose. It also gave me a reason to exclude chat,
+profiles, likes and friend requests.
 
-Shirky and Sloan helped me think about making software for a small group.
-Appleton's writing on ambient co-presence influenced how people appear in the
-sky. As the project grew, I found that keeping the scope small needed regular
-attention. Sometimes I was the one asking for extra features, so the README
-became a useful reminder of what I originally wanted.
+Shirky and Sloan's writing encouraged me to imagine a particular small group
+using the project. Appleton's work helped me think about sensing other people's
+presence. Those ideas were useful later, when I was tempted to add more. I
+returned to the README to check whether an addition fitted the project I had
+set out to make.
 
-The first version
-([`8ae37b7`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/8ae37b7))
-established a decision I kept throughout: connections store a history of
-declared events, and brightness is calculated from that history.
+One early decision stayed consistent: a connection would contain a history of
+declared events, with brightness calculated from that history. This was
+established in the first version
+([`8ae37b7`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/8ae37b7)).
 
-## Why this stack
+## Choosing the tools
 
-I used plain Node `http` with `node:sqlite` for one 256 MB machine and one
-volume. This kept the server simple and avoided adding a framework. The sky
-started with Canvas2D, then moved to Three.js
-([`3063865`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/3063865))
-when I wanted depth and light travelling along curved connections. It loads
-through a CDN import map, so there is no build step. The trade-off is that it
-depends on the CDN and the visitor's GPU.
+The server needed to run on one 256 MB machine with one volume. I kept it to
+Node `http` and `node:sqlite`, avoiding a framework. For drawing the sky, I
+initially used Canvas2D. I switched to Three.js when I wanted depth and light
+moving along curved paths
+([`3063865`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/3063865)).
+An import map loads it from a CDN. That avoids a build step, although it means
+relying on the CDN and the user's GPU.
 
-For crit 8, I used polling every four seconds. I had explicitly put off push
-updates in `CLAUDE.md`. For crit 9, I changed this to server-sent events
+At crit 8, browsers checked for updates every four seconds. Postponing push
+updates was an explicit decision in `CLAUDE.md`. For crit 9, I introduced SSE
 ([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)).
-Updates only need to travel from the server to the browser, and `EventSource`
-handles reconnection. This seemed simpler than adding WebSockets, as explained
-in ADR 0001. Sound uses Web Audio
+The server only needs to send updates to viewers, and `EventSource` reconnects
+automatically. ADR 0001 explains why I chose this over WebSockets. I used Web
+Audio to generate sound
 ([`6b24ec5`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/6b24ec5)),
-which lets me generate it without audio files or another build step.
+so it needs neither audio files nor a separate build process.
 
-## How I work with the agent
+## Working through changes
 
-I use Claude Code inside the repository. Usually I try the site first, then
-describe what I saw and what felt wrong. The agent investigates and implements
-the change. It commits changes separately and only pushes when I ask, because
-pushing to `main` triggers deployment. I record decisions in `CLAUDE.md`,
-including why they were needed. Larger decisions have an ADR.
+My usual starting point is using the site myself. I tell Claude Code what
+happened or what I found awkward, then it investigates the cause and makes the
+change. Changes get separate commits. Pushing requires my instruction because
+a push to `main` starts deployment. I keep the reasoning in `CLAUDE.md` and use
+ADRs for larger decisions. Including the problem behind a rule matters to me:
+without that explanation, it would be easy to read the instruction later and
+forget why it was there. The examples from testing and visual changes gave me
+specific things to record instead of only describing the result I hoped for.
 
-I check changes with `spec/` on a temporary server, headless Chrome
-screenshots, and my own use of the site. These checks catch different things.
-Passing tests did not always mean I was happy with the result. The permission
-problem showed that a test can miss a behaviour I have not thought to question.
-The visual changes showed a different limit: the code can work as requested
-while the overall result still feels wrong. These experiences helped me be
-more specific about what I wanted each check to tell me.
+I use the tests in `spec/` on a temporary server, screenshots from headless
+Chrome, and direct use of the app. Over the project, I became more aware of
+what each could tell me. Tests could confirm the behaviours I had specified,
+but they could miss questions I had never asked. Screenshots helped me judge
+appearance, while using the whole scene exposed problems that were harder to
+notice in individual images.
 
-## Who counts as a person
+## A problem with identity
 
-Before crit 10, I asked the agent to check the server against the brief's
-failure case. It found that the cookie contained only the star's id. Since
-every snapshot includes all star ids, someone could copy another id into their
-cookie and act as that person. I had described the app as multi-user since
-crit 8, but I had only checked that two browsers could use different stars.
-I had not tried impersonating someone.
+The audit before crit 10 changed my understanding of the multi-user part. I
+asked the agent to check the server against the brief's failure case and found
+that the cookie held the star's id. Snapshots expose those ids, so changing the
+cookie to another person's id let a user act as that person.
 
-The fix uses a random session secret, with its hash checked by the server
+Until then, I had treated two browsers showing different stars as enough
+verification. I had not checked whether someone could impersonate another
+user. The fix introduced a random session secret whose hash the server checks
 ([`0264917`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/0264917)).
-`spec/permissions.test.ts` now tries the old forged cookie and checks that it
-fails. I considered a signed id, but wanted sessions that could be revoked.
-Passwords were another option, but I wanted joining to require only a name.
+The permission test now sends a forged old-style cookie and expects rejection.
+I considered signing ids, but wanted revocable sessions. Passwords were also
+possible, although I wanted people to join by entering just a name.
 
-## When adding more made it worse
+## Working out what to remove
 
-The visual changes taught me the most. I thought the stars looked plain and
-asked the agent for a richer appearance. I then accepted several suggestions:
-bloom, redshift on old connections, a double helix for mutual connections,
-cluster nebulae, a targeting reticle, shockwaves and a close-up stellar surface
+I learned most from the changes to the sky's appearance. After deciding the
+stars looked too plain, I asked for more detail and accepted a series of
+suggestions. These included bloom, redshift, mutual connections drawn as a
+double helix, nebulae around clusters, a targeting reticle, shockwaves and a
+close-up star surface
 ([`bcf55bf`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/bcf55bf)
 to
 [`85271b1`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/85271b1)).
-The individual screenshots looked fine, but using the whole scene felt too
-busy. At first I could only say that I liked it less. I could not explain
-which changes were responsible.
 
-To compare properly, I had the old and new versions run with the same copy of
-the live data. The base colours were the same. The main problems were the
-helix covering the screen with waves, old connections turning pink, and purple
-fog around clusters. I removed those effects
+I liked the separate screenshots enough to continue. Once everything was
+running together, the sky felt crowded. Saying that it looked worse did not
+help much because I could not identify which parts caused that feeling.
+
+I asked for the earlier and newer versions to run with the same copy of the
+live data. That made the differences easier to follow. The original colours
+had stayed the same. What bothered me was the movement of the helix, the pink
+old connections and the purple fog around clusters. I removed those three
 ([`8c83b0b`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/8c83b0b)),
-then removed the blue background haze and reduced the stars' brightness
+then removed the blue haze and made the stars dimmer
 ([`74f7237`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/74f7237)).
-The brighter stars had looked cheap to me. Comparing again helped me decide
-when to stop.
+The brighter version looked cheap to me. Looking at the comparison again helped
+me decide that the scene was quiet enough.
 
-I added rules to `CLAUDE.md`: connections should stay plain arcs, stars should
-stay quiet, and changes to the overall appearance need a comparison first
+Afterwards, I recorded the choices in `CLAUDE.md`: use plain connection arcs,
+keep stars restrained, and compare versions before accepting a change to the
+overall look
 ([`14e224f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/14e224f)).
-Writing down the failed version made these rules more useful than simply
-asking the agent to make the site calm.
+These instructions now refer to a result I have actually seen. That gives them
+more meaning than my earlier general request for a calm sky.
 
-![The same sky before the cleanup](docs/process/sky-busy.jpg)
-![The same sky after the cleanup](docs/process/sky-calm.jpg)
+![Earlier version with the extra effects](docs/process/sky-busy.jpg)
+![Quieter version after removing effects](docs/process/sky-calm.jpg)
 
-I had a similar problem with sound. The first version made random pings,
-changed chords every fourteen seconds and used bright bells for actions. I
-found it restless. The rework
-([`5fb95ac`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/5fb95ac))
-removed random and percussive sounds and kept cues for the viewer's own
-actions. I listened locally before deploying it.
+Sound needed a similar revision. Random pings, bright action bells and chord
+changes every fourteen seconds made the first version feel restless. I had it
+reworked to remove random and percussive sounds, leaving cues for my own actions
+([`5fb95ac`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/5fb95ac)).
+I listened to the local version before it went live. Both revisions reminded
+me that I was responsible for choosing what stayed, even when the agent had
+successfully built what I requested.
 
-The agent could implement the ideas I requested, but I still had to decide
-whether they belonged. Having “calm” in the README had not been enough to guide
-all those individual decisions.
+## Other lessons from debugging
 
-## Smaller fixes
-
-Hover jitter took three attempts
-([`5ff7e97`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/5ff7e97));
-`docs/DESIGN-NOTES.md` records why the first two failed. Running the spec
-against my preview database once added test strangers to the sky, so I added
-a rule requiring a temporary database
+Fixing hover jitter took three attempts; the failed approaches are documented
+in `docs/DESIGN-NOTES.md`
+([`5ff7e97`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/5ff7e97)).
+I also ran tests against the preview database once and filled the sky with test
+users. That led to the temporary-database rule
 ([`561f3a2`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/561f3a2)).
-Presence also changed from “polled recently”, which kept stars lit for twenty
-seconds after leaving, to having an open stream
-([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)).
-ADR 0001 records that decision
+For presence, recent polling used to leave a star glowing for twenty seconds
+after its owner left. Presence now follows an open stream
+([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)),
+with the reasoning recorded in ADR 0001
 ([`8b14b99`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/8b14b99)).

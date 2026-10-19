@@ -1,65 +1,71 @@
-# What a harness can and cannot do
+# Keeping decisions in an agentic workflow
 
-A common suggestion in agentic coding is to build a harness around the agent.
-Böckeler (2026) describes guides, such as a `CLAUDE.md` file or a spec, that
-steer its work, and sensors, such as tests, that check the result. Klaassen's
-compound engineering suggests that recording lessons can make this process
-improve over time and reduce the human work needed. I agree that recording
-lessons helps, but I am less convinced about the second part. From working on
-my final project, I think a harness can help preserve decisions, while deciding
-what is good still needs human attention.
+During my final project, I asked the agent to make the sky look richer. It
+produced several effects that I accepted after looking at them separately.
+When I used the complete scene, I found it too busy. Comparing it with an
+earlier version using the same data helped me decide what to remove. Only
+then could I write specific instructions about keeping the appearance calm.
+This experience made me question how much judgement can be built into an
+agent's working environment.
 
-Willison (n.d.) argues that generating code has become cheap, while delivering
-good code remains expensive. This distinction helped me understand my own
-experience. The agent could quickly implement features, but checking whether
-I wanted them took longer. Böckeler also points out that an agent may not know
-which conventions are essential and which are habits. Tests help when someone
-has already defined the expected behaviour. They offer less help when I am
-still deciding what the result should feel like.
+Böckeler (2026) describes a harness as including guides that direct an agent
+and sensors that check its work. A project instruction file or a spec provides
+guidance, while tests provide feedback. Klaassen's account of compound
+engineering suggests that putting lessons back into this environment can
+improve later work and reduce the effort required from people. I can see why
+this is useful. My concern is the assumption that preserving more lessons will
+gradually reduce the need for human judgement. In my project, the rules became
+useful because I had already worked through a decision.
 
-The course's notes on spec-driven development describe how a model fills gaps
-in a spec using its learned priors (Swift, 2026). I saw a related problem in my
-project. I asked for richer visuals and accepted several effects because each
-looked reasonable on its own. Together, they made the sky too busy. I only
-understood what bothered me after comparing the old and new versions with the
-same data. This is one project, so it cannot show that harnesses generally
-fail. It does show a limit I encountered: I could not write a useful rule about
-an effect before I understood why I disliked it.
+Willison's (n.d.) distinction between cheap code generation and the continuing
+cost of good code fits this experience. Getting another effect implemented was
+easy. Understanding its effect on the whole project took more attention.
+Böckeler also notes the difficulty agents have in distinguishing important
+conventions from habits. A test is helpful once I know which behaviour matters
+and can describe it. Deciding whether the sky feels comfortable to leave open
+was harder to turn into a check beforehand.
 
-However, relying on my own impression also has problems. METR's 2025 trial
-found that experienced developers took 19% longer with early-2025 AI tools,
-although they believed the tools had made them 20% faster. Its 2026 update
-suggests newer tools may speed developers up, while warning that estimates of
-personal speedup remain unreliable. These studies concern productivity, rather
-than visual design, so they do not directly prove anything about my sky. They
-do give me a reason to be careful about saying a change is better just because
-it feels better. Comparing versions gave me something more concrete to discuss
-with the agent.
+The course material on spec-driven development explains that unspecified
+choices are filled using the model's learned priors (Swift, 2026). This gives
+me one way to understand the visual changes. Each addition looked reasonable,
+but the combined result moved away from what I wanted. My experience is too
+limited to establish a general problem with harnesses. It does suggest that
+an instruction like “make it calm” may leave important decisions unresolved,
+even when the agent follows the request as well as it can.
 
-One objection to my argument is that I simply needed a better harness. Once I
-had identified the visual problems, I could add rules against them. Böckeler's
-inferential sensors, where a model reviews another model's output, could also
-help with judgements that are difficult to test directly. I think these are
-useful possibilities. Still, writing a rule after a comparison does not show
-that the harness could have made the original decision.
+I also need to be careful about trusting my own judgement. In METR's 2025
+study, experienced developers took 19% longer using early-2025 AI tools, while
+estimating that they had become 20% faster. METR's 2026 update suggests that
+newer tools may improve speed, but still questions the reliability of people's
+own estimates. Productivity and visual quality are different issues, so I
+cannot use these findings as evidence about my design. They do encourage me
+to look for a clearer basis for comparison. Using identical data in the old
+and new versions helped me explain what I wanted changed.
 
-There are also reasons to question whether adding more rules always helps.
-The course's evidence-of-practice notes describe compound engineering as a
-claim with limited supporting evidence (Swift, 2026). Infralovers (2026)
-describe pruning their configuration after an agent repeated mistakes despite
-explicit rules. Their account is practical experience rather than a controlled
-study, but it challenges the assumption that a longer instruction file will
-keep improving results. Model-based reviews also have limits: Böckeler notes
-that they are slower and less deterministic. I would use them as another check,
-but would still want to examine important decisions myself.
+A reasonable response is that this comparison should itself become part of
+the harness. I agree. Rules written after the visual cleanup should help keep
+later changes consistent. Böckeler also discusses inferential sensors, where
+models review generated work. These might help assess qualities that ordinary
+tests cannot easily cover. However, recording the outcome of my comparison
+and making the original choice are different steps. A review can offer useful
+feedback while still needing someone to decide how that feedback fits the
+project.
 
-For my own work, this suggests three changes. First, I should request fewer
-additions at once so I can judge their effects. Second, I should compare
-versions or check the result against a clear project goal. Third, I should
-keep rules focused on decisions I have actually made, with the failure that
-explains each one. My project benefited from this kind of harness. I would
-need more evidence before claiming that it can gradually take over the human
-judgement involved.
+The evidence for a continuously improving harness also seems limited. Swift's
+(2026) evidence-of-practice material treats compound engineering as a claim
+with limited support. Infralovers (2026) report reducing their configuration
+after explicit instructions failed to prevent repeated mistakes. That is a
+practitioner account, so I would not treat it as proof that smaller files
+always work better. It does make me cautious about assuming that adding a rule
+necessarily improves the next result. Böckeler's warning that model-based
+checks are slower and less deterministic adds another reason to examine their
+output carefully.
+
+For now, I would keep using a harness to carry decisions forward. I would ask
+for fewer changes at once, compare the results against an earlier version or
+a clear goal, and record the reason behind each important rule. These are
+changes I can justify from my own project. I am less confident that the same
+process will eventually remove much of the judgement I need to contribute.
 
 ## References
 
