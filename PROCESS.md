@@ -22,22 +22,22 @@ established in the first version
 
 ## Choosing the tools
 
-The server needed to run on one 256 MB machine with one volume. I kept it to
-Node `http` and `node:sqlite`, avoiding a framework. For drawing the sky, I
-initially used Canvas2D. I switched to Three.js when I wanted depth and light
-moving along curved paths
+I wanted a setup that would be manageable for a small project. The server has
+limited memory and one place to store data, so I used Node and SQLite without
+adding a framework. For the sky, I started with Canvas2D and later moved to
+Three.js so I could add depth and light moving between stars
 ([`3063865`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/3063865)).
-An import map loads it from a CDN. That avoids a build step, although it means
-relying on the CDN and the user's GPU.
+It loads from a CDN, which keeps the project simple to run, although it depends
+on that service and the user's device being able to draw the scene.
 
-At crit 8, browsers checked for updates every four seconds. Postponing push
-updates was an explicit decision in `CLAUDE.md`. For crit 9, I introduced SSE
+At crit 8, the page checked for changes every four seconds. I had left faster
+updates for later in `CLAUDE.md`. For crit 9, I changed to SSE so people could
+see each other's actions without waiting for the next check
 ([`4134be6`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/4134be6)).
-The server only needs to send updates to viewers, and `EventSource` reconnects
-automatically. ADR 0001 explains why I chose this over WebSockets. I used Web
-Audio to generate sound
-([`6b24ec5`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/6b24ec5)),
-so it needs neither audio files nor a separate build process.
+It suited the app because the server mainly needs to send changes to viewers.
+I recorded the choice and alternatives in ADR 0001. I also used Web Audio to
+make sound in the browser, avoiding separate audio files
+([`6b24ec5`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/6b24ec5)).
 
 ## Working through changes
 
@@ -57,20 +57,20 @@ but they could miss questions I had never asked. Screenshots helped me judge
 appearance, while using the whole scene exposed problems that were harder to
 notice in individual images.
 
-## A problem with identity
+## Checking that users stay separate
 
-The audit before crit 10 changed my understanding of the multi-user part. I
-asked the agent to check the server against the brief's failure case and found
-that the cookie held the star's id. Snapshots expose those ids, so changing the
-cookie to another person's id let a user act as that person.
+Before crit 10, I asked the agent to check whether one user could act as
+someone else. We found that they could: the way the app recognised people was
+too easy to copy. Until then, I had only checked that two browsers could show
+different stars. I had not tried to use one browser to act as the other person.
 
-Until then, I had treated two browsers showing different stars as enough
-verification. I had not checked whether someone could impersonate another
-user. The fix introduced a random session secret whose hash the server checks
+We changed how the app recognises a returning user and added a test that tries
+to impersonate someone else
 ([`0264917`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-chajie0824/commit/0264917)).
-The permission test now sends a forged old-style cookie and expects rejection.
-I considered signing ids, but wanted revocable sessions. Passwords were also
-possible, although I wanted people to join by entering just a name.
+I wanted to keep joining simple, with just a name rather than a password.
+This showed me that I needed to check what users should be prevented from
+doing, as well as whether the normal steps worked. Seeing two people use the
+app successfully had missed an important part of the multi-user requirement.
 
 ## Working out what to remove
 
